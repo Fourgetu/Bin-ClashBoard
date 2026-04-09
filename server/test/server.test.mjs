@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { after } from 'node:test'
 
-const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ange-clashboard-test-'))
+const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bin-clashboard-test-'))
 const dbPath = path.join(tempDir, 'zashboard.sqlite')
 const ruleSourcePath = path.join(tempDir, 'rule-source.yaml')
 

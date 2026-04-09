@@ -594,7 +594,7 @@ function stringifyManagedRuleSourceConfig(providers) {
   )
 
   return [
-    '# Managed rule-provider cache sources for AnGe-ClashBoard',
+    '# Managed rule-provider cache sources for Bin-ClashBoard',
     '# This file is auto-generated. Only rule-providers are kept here.',
     '',
     stringifyYaml({

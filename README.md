@@ -2,19 +2,13 @@
 
 ![Bin-ClashBoard 首图](readme/hero.png)
 
-Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 和 [zashboard](https://github.com/Zephyruso/zashboard) 继续开发的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
+Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 与 [zashboard](https://github.com/Zephyruso/zashboard) 继续演进的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `1.85`，基于 AnGe-ClashBoard 与开源 zashboard 持续演进。
+当前版本为 `1.85`，由 Bin-ClashBoard 持续维护。
 
 ## 教学视频
 
 - [YouTube 教学视频](https://youtu.be/J5mdEJQHlG8)
-
-## 相关链接
-
-- [安格超市（代理、VPN、VPS、住宅IP、GPT/流媒体账号）](https://blog.angeworld.cc/market)
-- [芝麻开门AI接口（GPT5.4/Claude4.6/Gemini3.1）](https://ai.opendoor.cn)
-- [安格视界官方TG群2](https://t.me/angeworld2024_2)
 
 ## 项目特点
 
