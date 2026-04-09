@@ -1,10 +1,10 @@
-# AnGe-ClashBoard
+# Bin-ClashBoard
 
-![AnGe-ClashBoard 首图](readme/hero.png)
+![Bin-ClashBoard 首图](readme/hero.png)
 
-AnGe-ClashBoard 是一个基于 `Vue 3 + TypeScript + Vite` 的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
+Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 和 [zashboard](https://github.com/Zephyruso/zashboard) 继续开发的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `1.85`，基于开源 [zashboard](https://github.com/Zephyruso/zashboard) 二次开发。
+当前版本为 `1.85`，基于 AnGe-ClashBoard 与开源 zashboard 持续演进。
 
 ## 教学视频
 
@@ -56,14 +56,14 @@ AnGe-ClashBoard 是一个基于 `Vue 3 + TypeScript + Vite` 的 Clash 面板，�
 - 可以访问 `ghcr.io`
 - 需要对外开放你准备使用的面板端口
 
-默认安装目录：`/opt/ange-clashboard`
+默认安装目录：`/opt/bin-clashboard`
 
-默认数据目录：`/opt/ange-clashboard/data`
+默认数据目录：`/opt/bin-clashboard/data`
 
 默认端口：`2048`
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/scripts/install.sh | bash
 ```
 
 安装完成后访问：
@@ -77,7 +77,7 @@ http://<你的服务器IP>:2048
 例如部署到 `8080`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scripts/install.sh | bash -s -- 8080
+curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/scripts/install.sh | bash -s -- 8080
 ```
 
 ## 无损升级
@@ -87,16 +87,16 @@ curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scr
 默认保留目录：
 
 ```bash
-/opt/ange-clashboard/data
+/opt/bin-clashboard/data
 ```
 
 仍然建议你先在面板里执行一次“导出设置”，额外留一份配置备份，以防意外情况。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scripts/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/scripts/update.sh | bash
 ```
 
-如果你之前是通过一键脚本安装，并且没有手动改过 `/opt/ange-clashboard/compose.yaml` 和 `.env` 的结构，这个升级方式就是原位无损升级。
+如果你之前是通过一键脚本安装，并且没有手动改过 `/opt/bin-clashboard/compose.yaml` 和 `.env` 的结构，这个升级方式就是原位无损升级。
 
 ## 彻底卸载
 
@@ -104,11 +104,11 @@ curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scr
 
 - 容器
 - 镜像
-- `/opt/ange-clashboard`
+- `/opt/bin-clashboard`
 - 本地数据目录
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/scripts/uninstall.sh | bash
 ```
 
 ## Docker 运行
@@ -116,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/liandu2024/AnGe-ClashBoard/main/scr
 推荐直接使用已发布到 GHCR 的镜像：
 
 ```bash
-ghcr.io/liandu2024/ange-clashboard:latest
+ghcr.io/fourgetu/bin-clashboard:latest
 ```
 
 已发布镜像支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`。
@@ -125,11 +125,11 @@ ghcr.io/liandu2024/ange-clashboard:latest
 
 ```bash
 docker run -d \
-  --name ange-clashboard \
+  --name bin-clashboard \
   -p 2048:2048 \
   -v ./data:/app/data \
   --restart unless-stopped \
-  ghcr.io/liandu2024/ange-clashboard:latest
+  ghcr.io/fourgetu/bin-clashboard:latest
 ```
 
 上面的 `--restart unless-stopped` 表示容器会在 Docker 服务重启后自动拉起，除非你手动停止它。
@@ -141,17 +141,17 @@ docker run -d \
 仍然建议先在面板里导出一次设置，额外备份配置数据后再升级。
 
 ```bash
-docker pull ghcr.io/liandu2024/ange-clashboard:latest
+docker pull ghcr.io/fourgetu/bin-clashboard:latest
 
-docker stop ange-clashboard
-docker rm ange-clashboard
+docker stop bin-clashboard
+docker rm bin-clashboard
 
 docker run -d \
-  --name ange-clashboard \
+  --name bin-clashboard \
   -p 2048:2048 \
   -v ./data:/app/data \
   --restart unless-stopped \
-  ghcr.io/liandu2024/ange-clashboard:latest
+  ghcr.io/fourgetu/bin-clashboard:latest
 ```
 
 如果你之前使用了自定义端口、不同的容器名，或不同的数据目录挂载，请把上面的参数改成你当前正在使用的那一套。
@@ -231,4 +231,4 @@ ZASHBOARD_RULE_SOURCE_PATH
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=liandu2024/AnGe-ClashBoard&type=Date)](https://www.star-history.com/#liandu2024/AnGe-ClashBoard&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Fourgetu/Bin-ClashBoard&type=Date)](https://www.star-history.com/#Fourgetu/Bin-ClashBoard&Date)

@@ -25,6 +25,12 @@
             <div>
               {{ subscriptionInfo.usageStr }}
             </div>
+            <progress
+              v-if="subscriptionInfo.hasTotal"
+              class="progress progress-primary mt-1 h-1.5 w-full"
+              :value="subscriptionInfo.percentage"
+              max="100"
+            />
             <div>{{ $t('updated') }} {{ fromNow(proxyProvider.updatedAt) }}</div>
           </div>
         </div>
@@ -429,6 +435,8 @@ const subscriptionInfo = computed(() => {
     return {
       expireStr,
       usageStr,
+      percentage,
+      hasTotal: Total > 0,
     }
   }
 
