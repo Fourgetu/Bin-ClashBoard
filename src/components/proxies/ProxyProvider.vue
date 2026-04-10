@@ -57,13 +57,6 @@
               />
             </button>
             <button
-              v-if="subscriptionInfo"
-              :class="twMerge('btn btn-circle btn-sm z-30', providerResetControlsExpanded && 'btn-neutral')"
-              @click.stop="toggleProviderResetControls"
-            >
-              <Cog6ToothIcon class="h-4 w-4" />
-            </button>
-            <button
               :class="twMerge('btn btn-circle btn-sm z-30')"
               @click.stop="healthCheckClickHandler"
             >
@@ -83,27 +76,6 @@
             >
               <ArrowPathIcon :class="twMerge('h-4 w-4', isUpdating ? 'animate-spin' : '')" />
             </button>
-          </div>
-          <div v-if="subscriptionInfo && providerResetControlsExpanded" class="flex justify-end gap-2">
-            <div class="flex items-center gap-2" @mousedown.stop @click.stop>
-              <div
-                @mouseenter="(e) => showTip(e, t('resetDayTip'))"
-                @mouseleave="hideTip()"
-              >
-                <TextInput
-                  class="w-14"
-                  v-model="providerResetDayModel"
-                  placeholder="1-31"
-                  inputmode="numeric"
-                />
-              </div>
-              <button
-                class="btn btn-ghost btn-xs"
-                @click.stop="clearProviderResetDay"
-              >
-                {{ $t('reset') }}
-              </button>
-            </div>
           </div>
           <div
             v-if="subscriptionInfo && shouldShowProviderCategoryControls"
@@ -286,7 +258,6 @@ import {
   providerProxyCategoryFeatureEnabled,
   providerProxyCategoryOrderMap,
   providerProxyCategoryWildcardMap,
-  providerSubscriptionResetDayMap,
 } from '@/store/settings'
 import {
   ArrowPathIcon,
@@ -295,7 +266,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
-  Cog6ToothIcon,
 } from '@heroicons/vue/24/outline'
 import dayjs from 'dayjs'
 import { toFinite } from 'lodash'
@@ -444,54 +414,6 @@ const toggleProviderCategoryControlsCollapsed = () => {
   providerCategoryControlsCollapsed.value = !providerCategoryControlsCollapsed.value
 }
 
-const providerResetControlsExpanded = ref(false)
-
-const toggleProviderResetControls = () => {
-  providerResetControlsExpanded.value = !providerResetControlsExpanded.value
-}
-
-const providerResetDayModel = computed({
-  get: () => {
-    const day = providerSubscriptionResetDayMap.value[props.name]
-    return typeof day === 'number' && day >= 1 && day <= 31 ? String(day) : ''
-  },
-  set: (value: string) => {
-    const digitsOnly = value.replace(/\D+/g, '')
-    if (!digitsOnly) {
-      delete providerSubscriptionResetDayMap.value[props.name]
-      return
-    }
-
-    const day = Math.min(31, Math.max(1, Number(digitsOnly)))
-    providerSubscriptionResetDayMap.value[props.name] = day
-  },
-})
-
-const clearProviderResetDay = () => {
-  delete providerSubscriptionResetDayMap.value[props.name]
-}
-
-const getNextResetTimeByDay = (day?: number) => {
-  if (!Number.isInteger(day) || !day || day < 1 || day > 31) return null
-
-  const now = dayjs()
-  const currentMonthDays = now.daysInMonth()
-  const currentMonthTargetDay = Math.min(day, currentMonthDays)
-  let candidate = now.date(currentMonthTargetDay).hour(0).minute(0).second(0).millisecond(0)
-
-  if (!candidate.isAfter(now)) {
-    const nextMonth = now.add(1, 'month')
-    candidate = nextMonth
-      .date(Math.min(day, nextMonth.daysInMonth()))
-      .hour(0)
-      .minute(0)
-      .second(0)
-      .millisecond(0)
-  }
-
-  return candidate.format('YYYY-MM-DD HH:mm')
-}
-
 const formatResetTime = (resetValue?: string | number) => {
   if (resetValue == null || resetValue === '') return null
 
@@ -530,8 +452,7 @@ const subscriptionInfo = computed(() => {
       Expire === 0
         ? `${t('expire')}: ${t('noExpire')}`
         : `${t('expire')}: ${dayjs(Expire * 1000).format('YYYY-MM-DD')}`
-    const manualResetDay = providerSubscriptionResetDayMap.value[props.name]
-    const resetValue = formatResetTime(Reset) ?? getNextResetTimeByDay(manualResetDay)
+    const resetValue = formatResetTime(Reset)
     const resetStr = resetValue ? `${t('nextReset')}: ${resetValue}` : null
 
     const usedStr = `${used} / ${total}`
