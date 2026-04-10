@@ -57,6 +57,13 @@
               />
             </button>
             <button
+              v-if="subscriptionInfo"
+              :class="twMerge('btn btn-circle btn-sm z-30', providerResetControlsExpanded && 'btn-neutral')"
+              @click.stop="toggleProviderResetControls"
+            >
+              <Cog6ToothIcon class="h-4 w-4" />
+            </button>
+            <button
               :class="twMerge('btn btn-circle btn-sm z-30')"
               @click.stop="healthCheckClickHandler"
             >
@@ -77,6 +84,27 @@
               <ArrowPathIcon :class="twMerge('h-4 w-4', isUpdating ? 'animate-spin' : '')" />
             </button>
           </div>
+          <div v-if="subscriptionInfo && providerResetControlsExpanded" class="flex justify-end gap-2">
+            <div class="flex items-center gap-2" @mousedown.stop @click.stop>
+              <div
+                @mouseenter="(e) => showTip(e, t('resetDayTip'))"
+                @mouseleave="hideTip()"
+              >
+                <TextInput
+                  class="w-14"
+                  v-model="providerResetDayModel"
+                  placeholder="1-31"
+                  inputmode="numeric"
+                />
+              </div>
+              <button
+                class="btn btn-ghost btn-xs"
+                @click.stop="clearProviderResetDay"
+              >
+                {{ $t('reset') }}
+              </button>
+            </div>
+          </div>
           <div
             v-if="subscriptionInfo && shouldShowProviderCategoryControls"
             class="flex justify-end gap-2"
@@ -95,25 +123,6 @@
               />
             </button>
             <template v-if="!providerCategoryControlsCollapsed">
-              <div class="flex items-center gap-2" @mousedown.stop @click.stop>
-                <div
-                  @mouseenter="(e) => showTip(e, t('resetDayTip'))"
-                  @mouseleave="hideTip()"
-                >
-                  <TextInput
-                    class="w-14"
-                    v-model="providerResetDayModel"
-                    placeholder="1-31"
-                    inputmode="numeric"
-                  />
-                </div>
-                <button
-                  class="btn btn-ghost btn-xs"
-                  @click.stop="clearProviderResetDay"
-                >
-                  {{ $t('reset') }}
-                </button>
-              </div>
               <div
                 @mousedown.stop
                 @click.stop
@@ -286,6 +295,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
+  Cog6ToothIcon,
 } from '@heroicons/vue/24/outline'
 import dayjs from 'dayjs'
 import { toFinite } from 'lodash'
@@ -432,6 +442,12 @@ const toggleProviderCategory = () => {
 
 const toggleProviderCategoryControlsCollapsed = () => {
   providerCategoryControlsCollapsed.value = !providerCategoryControlsCollapsed.value
+}
+
+const providerResetControlsExpanded = ref(false)
+
+const toggleProviderResetControls = () => {
+  providerResetControlsExpanded.value = !providerResetControlsExpanded.value
 }
 
 const providerResetDayModel = computed({
