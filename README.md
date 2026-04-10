@@ -4,7 +4,7 @@
 
 Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 与 [zashboard](https://github.com/Zephyruso/zashboard) 继续演进的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `1.85-2`，由 Bin-ClashBoard 持续维护。
+当前版本为 `1.85-3`，由 Bin-ClashBoard 持续维护。
 
 ## 教学视频
 
@@ -115,6 +115,8 @@ curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/script
 
 默认端口：`2048`
 
+Linux / bash:
+
 ```bash
 docker run -d \
   --name bin-clashboard \
@@ -122,6 +124,12 @@ docker run -d \
   -v ./data:/app/data \
   --restart unless-stopped \
   ghcr.io/fourgetu/bin-clashboard:latest
+```
+
+Windows PowerShell:
+
+```powershell
+docker run -d --name bin-clashboard -p 2048:2048 -v ${PWD}/data:/app/data --restart unless-stopped ghcr.io/fourgetu/bin-clashboard:latest
 ```
 
 安装完成后访问：
@@ -140,6 +148,8 @@ http://<你的服务器IP>:2048
 
 仍然建议先在面板里导出一次设置，额外备份配置数据后再升级。
 
+Linux / bash:
+
 ```bash
 docker pull ghcr.io/fourgetu/bin-clashboard:latest
 
@@ -152,6 +162,15 @@ docker run -d \
   -v ./data:/app/data \
   --restart unless-stopped \
   ghcr.io/fourgetu/bin-clashboard:latest
+```
+
+Windows PowerShell:
+
+```powershell
+docker pull ghcr.io/fourgetu/bin-clashboard:latest
+docker stop bin-clashboard
+docker rm bin-clashboard
+docker run -d --name bin-clashboard -p 2048:2048 -v ${PWD}/data:/app/data --restart unless-stopped ghcr.io/fourgetu/bin-clashboard:latest
 ```
 
 如果你之前使用了自定义端口、不同的容器名，或不同的数据目录挂载，请把上面的参数改成你当前正在使用的那一套。
