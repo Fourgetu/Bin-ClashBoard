@@ -69,6 +69,8 @@ const en = {
   noExpire: 'No expiry',
   nextReset: 'Next reset',
   noReset: 'Unavailable',
+  resetDay: 'Reset day',
+  resetDayTip: 'Day of month to reset, leave empty to hide',
   updated: 'Updated',
   upgradeUI: 'Upgrade dashboard',
   reloadConfigs: 'Reload configs',

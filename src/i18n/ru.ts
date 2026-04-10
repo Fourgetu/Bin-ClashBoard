@@ -72,6 +72,8 @@ const ru: LANG_MESSAGE = {
   noExpire: 'Нет',
   nextReset: 'Следующий сброс',
   noReset: 'Недоступно',
+  resetDay: 'День сброса',
+  resetDayTip: 'Какого числа месяца сбрасывается трафик, пусто чтобы скрыть',
   updated: 'Обновлено',
   upgradeUI: 'Обновить панель',
   reloadConfigs: 'Перезагрузить конфигурации',

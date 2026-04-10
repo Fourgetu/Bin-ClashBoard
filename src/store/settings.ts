@@ -241,6 +241,10 @@ export const providerProxyCategoryOrderMap = useStorage<Record<string, string[]>
   'config/provider-proxy-category-order-map',
   {},
 )
+export const providerSubscriptionResetDayMap = useStorage<Record<string, number>>(
+  'config/provider-subscription-reset-day-map',
+  {},
+)
 export const groupTestUrls = useStorage<
   {
     name: string

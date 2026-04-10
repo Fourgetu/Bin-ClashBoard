@@ -71,6 +71,8 @@ const zh: LANG_MESSAGE = {
   noExpire: '不限时',
   nextReset: '下次重置',
   noReset: '未提供',
+  resetDay: '重置日',
+  resetDayTip: '每月几号重置，留空则不显示',
   updated: '更新于',
   upgradeUI: '更新面板',
   reloadConfigs: '重载配置',
