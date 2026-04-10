@@ -67,6 +67,8 @@ const en = {
   ruleCacheUpdated: 'Rule cache updated',
   expire: 'Expire',
   noExpire: 'No expiry',
+  nextReset: 'Next reset',
+  noReset: 'Unavailable',
   updated: 'Updated',
   upgradeUI: 'Upgrade dashboard',
   reloadConfigs: 'Reload configs',

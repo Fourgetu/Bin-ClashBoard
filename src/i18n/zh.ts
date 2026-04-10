@@ -69,6 +69,8 @@ const zh: LANG_MESSAGE = {
   ruleCacheUpdated: '规则缓存已更新',
   expire: '到期时间',
   noExpire: '不限时',
+  nextReset: '下次重置',
+  noReset: '未提供',
   updated: '更新于',
   upgradeUI: '更新面板',
   reloadConfigs: '重载配置',

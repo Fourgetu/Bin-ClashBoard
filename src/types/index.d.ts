@@ -60,6 +60,7 @@ export type SubscriptionInfo = {
   Upload?: number
   Total?: number
   Expire?: number
+  Reset?: string | number
 }
 
 export type ProxyProvider = {

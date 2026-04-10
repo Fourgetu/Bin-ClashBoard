@@ -69,6 +69,8 @@ const zhTW: LANG_MESSAGE = {
   ruleCacheUpdated: '規則快取已更新',
   expire: '到期時間',
   noExpire: '不限時',
+  nextReset: '下次重置',
+  noReset: '未提供',
   updated: '更新於',
   upgradeUI: '更新面板',
   reloadConfigs: '重載配置',

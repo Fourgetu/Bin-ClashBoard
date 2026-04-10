@@ -22,6 +22,9 @@
             <div>
               {{ subscriptionInfo.expireStr }}
             </div>
+            <div v-if="subscriptionInfo.resetStr">
+              {{ subscriptionInfo.resetStr }}
+            </div>
             <div>
               {{ subscriptionInfo.usageStr }}
             </div>
@@ -411,29 +414,53 @@ const toggleProviderCategoryControlsCollapsed = () => {
   providerCategoryControlsCollapsed.value = !providerCategoryControlsCollapsed.value
 }
 
+const formatResetTime = (resetValue?: string | number) => {
+  if (resetValue == null || resetValue === '') return null
+
+  if (typeof resetValue === 'number' && Number.isFinite(resetValue)) {
+    const timestamp = resetValue > 1e12 ? resetValue : resetValue * 1000
+    return dayjs(timestamp).isValid() ? dayjs(timestamp).format('YYYY-MM-DD HH:mm') : null
+  }
+
+  const normalized = String(resetValue).trim()
+  if (!normalized) return null
+
+  if (/^\d+$/.test(normalized)) {
+    const numeric = Number(normalized)
+    const timestamp = numeric > 1e12 ? numeric : numeric * 1000
+    return dayjs(timestamp).isValid() ? dayjs(timestamp).format('YYYY-MM-DD HH:mm') : null
+  }
+
+  const parsed = dayjs(normalized)
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : normalized
+}
+
 const subscriptionInfo = computed(() => {
   const info = proxyProvider.value.subscriptionInfo
 
   if (info) {
-    const { Download = 0, Upload = 0, Total = 0, Expire = 0 } = info
+    const { Download = 0, Upload = 0, Total = 0, Expire = 0, Reset } = info
 
-    if (Download === 0 && Upload === 0 && Total === 0 && Expire === 0) {
+    if (Download === 0 && Upload === 0 && Total === 0 && Expire === 0 && !Reset) {
       return null
     }
 
     const total = prettyBytesHelper(Total, { binary: true })
     const used = prettyBytesHelper(Download + Upload, { binary: true })
-    const percentage = toFinite((((Download + Upload) / Total) * 100).toFixed(2))
+    const percentage = Total > 0 ? toFinite((((Download + Upload) / Total) * 100).toFixed(2)) : 100
     const expireStr =
       Expire === 0
         ? `${t('expire')}: ${t('noExpire')}`
         : `${t('expire')}: ${dayjs(Expire * 1000).format('YYYY-MM-DD')}`
+    const resetValue = formatResetTime(Reset)
+    const resetStr = resetValue ? `${t('nextReset')}: ${resetValue}` : null
 
     const usedStr = `${used} / ${total}`
     const usageStr = Total === 0 ? usedStr : `${usedStr} ( ${percentage}% )`
 
     return {
       expireStr,
+      resetStr,
       usageStr,
       percentage,
       progressValue: Total > 0 ? percentage : 100,

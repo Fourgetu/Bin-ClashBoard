@@ -70,6 +70,8 @@ const ru: LANG_MESSAGE = {
   ruleCacheUpdated: 'Кэш правил обновлен',
   expire: 'Истекает',
   noExpire: 'Нет',
+  nextReset: 'Следующий сброс',
+  noReset: 'Недоступно',
   updated: 'Обновлено',
   upgradeUI: 'Обновить панель',
   reloadConfigs: 'Перезагрузить конфигурации',
