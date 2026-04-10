@@ -4,7 +4,7 @@
 
 Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 与 [zashboard](https://github.com/Zephyruso/zashboard) 继续演进的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `1.85-1`，由 Bin-ClashBoard 持续维护。
+当前版本为 `1.85-2`，由 Bin-ClashBoard 持续维护。
 
 ## 教学视频
 
@@ -105,17 +105,15 @@ curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/script
 curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/scripts/uninstall.sh | bash
 ```
 
-## Docker 运行
+## Docker 安装
 
-推荐直接使用已发布到 GHCR 的镜像：
+安装前提：
 
-```bash
-ghcr.io/fourgetu/bin-clashboard:latest
-```
+- 服务器已安装 Docker
+- 可以访问 `ghcr.io`
+- 需要对外开放你准备使用的面板端口
 
-已发布镜像支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`。
-
-手动运行：
+默认端口：`2048`
 
 ```bash
 docker run -d \
@@ -126,11 +124,19 @@ docker run -d \
   ghcr.io/fourgetu/bin-clashboard:latest
 ```
 
+安装完成后访问：
+
+```bash
+http://<你的服务器IP>:2048
+```
+
+已发布镜像支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`。
+
 上面的 `--restart unless-stopped` 表示容器会在 Docker 服务重启后自动拉起，除非你手动停止它。
 
 ## Docker 无损升级
 
-如果你是通过 `-v ./data:/app/data` 这类挂载方式运行，升级镜像时会保留原有数据目录，属于无损升级。
+如果你是通过 `docker run -v ./data:/app/data` 这类挂载方式运行，升级镜像时会保留原有数据目录，属于无损升级。
 
 仍然建议先在面板里导出一次设置，额外备份配置数据后再升级。
 
