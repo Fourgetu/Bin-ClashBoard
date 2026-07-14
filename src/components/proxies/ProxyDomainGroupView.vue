@@ -266,6 +266,7 @@
       v-model="editRuleDialogOpen"
       :title="$t('editCustomRule')"
       box-class="w-[min(32rem,calc(100vw-2rem))] max-w-none"
+      content-class="overflow-visible!"
     >
       <form
         class="flex flex-col gap-4"
@@ -308,16 +309,109 @@
           />
         </label>
 
-        <label class="form-control gap-1">
+        <div class="form-control gap-1">
           <span class="label-text text-sm">{{ $t('params') }}</span>
-          <input
-            v-model="editRuleForm.param"
-            type="text"
-            class="input input-sm w-full"
-            placeholder="DIRECT"
-            autocomplete="off"
-          />
-        </label>
+          <div class="relative">
+            <button
+              type="button"
+              class="select select-sm flex w-full cursor-pointer items-center justify-between gap-2 pr-9 text-left"
+              :class="editRuleParamDropdownOpen && 'select-primary'"
+              @click="toggleEditRuleParamDropdown"
+            >
+              <span class="min-w-0 flex-1 truncate">
+                {{ selectedEditRuleParamOption?.name || editRuleForm.param }}
+              </span>
+              <ChevronDownIcon
+                class="h-4 w-4 shrink-0 transition-transform"
+                :class="editRuleParamDropdownOpen && 'rotate-180'"
+              />
+            </button>
+
+            <div
+              v-if="editRuleParamDropdownOpen"
+              class="border-base-300 bg-base-100! absolute right-0 bottom-full left-0 z-[70] mb-2 rounded-md border [background-color:var(--color-base-100)] p-2 shadow-xl backdrop-blur-none!"
+            >
+              <div class="flex min-w-0 items-center gap-2">
+                <div
+                  role="tablist"
+                  class="bg-base-200/80 inline-flex h-8 min-w-max shrink-0 items-center gap-1 rounded-md p-1"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    class="h-6 shrink-0 cursor-pointer rounded-md px-3 text-sm leading-6 font-medium whitespace-nowrap transition-colors"
+                    :class="
+                      editRuleParamTab === 'group'
+                        ? 'bg-base-100 text-base-content shadow-sm'
+                        : 'text-base-content/60 hover:text-base-content'
+                    "
+                    @click="editRuleParamTab = 'group'"
+                  >
+                    {{ $t('proxyParamGroup') }}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    class="h-6 shrink-0 cursor-pointer rounded-md px-3 text-sm leading-6 font-medium whitespace-nowrap transition-colors"
+                    :class="
+                      editRuleParamTab === 'node'
+                        ? 'bg-base-100 text-base-content shadow-sm'
+                        : 'text-base-content/60 hover:text-base-content'
+                    "
+                    @click="editRuleParamTab = 'node'"
+                  >
+                    {{ $t('proxyParamNode') }}
+                  </button>
+                </div>
+                <TextInput
+                  v-model="editRuleParamSearch"
+                  class="min-w-0 flex-1"
+                  :placeholder="$t('search')"
+                  :clearable="true"
+                />
+              </div>
+
+              <div
+                class="border-base-300/70 bg-base-100! mt-2 max-h-44 overflow-y-auto rounded-md border [background-color:var(--color-base-100)] backdrop-blur-none!"
+              >
+                <div
+                  v-if="filteredEditRuleParamOptions.length === 0"
+                  class="text-base-content/60 flex h-16 items-center justify-center text-sm"
+                >
+                  {{ $t('noData') }}
+                </div>
+                <template v-else>
+                  <div
+                    v-for="option in filteredEditRuleParamOptions"
+                    :key="`${option.type}:${option.name}`"
+                    class="hover:bg-base-200 flex min-h-10 items-center gap-2 px-3 py-2 text-sm transition-colors"
+                    :class="editRuleForm.param === option.name && 'bg-primary/10'"
+                  >
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                      @click="selectEditRuleParam(option.name)"
+                    >
+                      <span class="h-4 w-4 shrink-0">
+                        <CheckIcon
+                          v-if="editRuleForm.param === option.name"
+                          class="h-4 w-4"
+                        />
+                      </span>
+                      <span class="min-w-0 flex-1 truncate">{{ option.name }}</span>
+                      <span
+                        v-if="option.type !== 'builtin'"
+                        class="text-base-content/45 shrink-0 text-xs"
+                      >
+                        {{ option.type === 'group' ? $t('proxyParamGroup') : $t('proxyParamNode') }}
+                      </span>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div class="pending-restart-dialog-footer modal-action mt-1">
           <p class="pending-restart-dialog-hint">
@@ -405,6 +499,7 @@
 
 <script setup lang="ts">
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
+import TextInput from '@/components/common/TextInput.vue'
 import {
   disableProxiesPageScroll,
   domainGroupProviderNames,
@@ -414,7 +509,9 @@ import {
   domainGroupSelectedProvider,
   domainRuleConfigChanged,
   domainRulesReloadRevision,
+  nodeGroups,
 } from '@/composables/proxies'
+import { isPassRuleProxy, isProxyGroup } from '@/helper'
 import { showNotification } from '@/helper/notification'
 import {
   DOMAIN_GROUP_CUSTOM_SOURCE,
@@ -435,6 +532,8 @@ import {
   ArrowDownCircleIcon,
   ArrowUpCircleIcon,
   Bars3Icon,
+  CheckIcon,
+  ChevronDownIcon,
   QueueListIcon,
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
@@ -462,6 +561,13 @@ type DomainRuleColumn = {
 type DragEndEvent = {
   oldIndex?: number
   newIndex?: number
+}
+
+type CustomRuleParamOption = {
+  name: string
+  type: 'builtin' | 'group' | 'node'
+  index: number
+  searchable: string
 }
 
 type DomainGroupResponse = {
@@ -498,6 +604,9 @@ const suppressRowClick = ref(false)
 const editRuleDialogOpen = ref(false)
 const isSavingEditRule = ref(false)
 const editingEntry = ref<ProxyGroupRulePenetrationEntry | null>(null)
+const editRuleParamSearch = ref('')
+const editRuleParamTab = ref<'group' | 'node'>('group')
+const editRuleParamDropdownOpen = ref(false)
 const deleteRuleDialogOpen = ref(false)
 const isDeletingRule = ref(false)
 const deletingEntry = ref<ProxyGroupRulePenetrationEntry | null>(null)
@@ -587,6 +696,52 @@ const editRuleValuePlaceholder = computed(() => {
   if (editRuleForm.value.type === 'DOMAIN-KEYWORD') return 'keyword'
   return 'example.com'
 })
+const editRuleParamOptions = computed<CustomRuleParamOption[]>(() => {
+  const options: CustomRuleParamOption[] = []
+  const seen = new Set<string>()
+  const append = (name: string, type: CustomRuleParamOption['type']) => {
+    const normalizedName = String(name || '').trim()
+
+    if (!normalizedName || seen.has(normalizedName)) return
+
+    seen.add(normalizedName)
+    options.push({
+      name: normalizedName,
+      type,
+      index: options.length,
+      searchable: normalizedName.toLowerCase(),
+    })
+  }
+
+  append('DIRECT', 'builtin')
+  append('REJECT', 'builtin')
+  nodeGroups.value.forEach((name) => append(name, 'group'))
+  Object.values(proxyMap.value).forEach((proxy) => {
+    if (proxy && !isPassRuleProxy(proxy) && !isProxyGroup(proxy.name)) append(proxy.name, 'node')
+  })
+
+  return options
+})
+const filteredEditRuleParamOptions = computed(() => {
+  const keywords = editRuleParamSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const filteredOptions = keywords.length
+    ? editRuleParamOptions.value.filter((option) =>
+        keywords.every((keyword) => option.searchable.includes(keyword)),
+      )
+    : editRuleParamOptions.value
+  const builtins =
+    editRuleParamTab.value === 'node'
+      ? filteredOptions.filter((option) => option.type === 'builtin')
+      : []
+  const selectableOptions = filteredOptions
+    .filter((option) => option.type === editRuleParamTab.value)
+    .sort((left, right) => left.index - right.index)
+
+  return [...builtins, ...selectableOptions]
+})
+const selectedEditRuleParamOption = computed(() =>
+  editRuleParamOptions.value.find((option) => option.name === editRuleForm.value.param),
+)
 
 const isSelectedCustomGroup = computed(() => isDomainGroupCustomKey(selectedGroupName.value))
 
@@ -753,6 +908,21 @@ const isEditableCustomRule = (item: ProxyGroupRulePenetrationEntry) =>
 
 const isDeletableCustomRule = () => isSelectedCustomGroup.value
 
+const toggleEditRuleParamDropdown = () => {
+  if (!editRuleParamDropdownOpen.value) {
+    const currentTarget = editRuleForm.value.param.split(',')[0]?.trim() || ''
+    const currentOption = editRuleParamOptions.value.find((option) => option.name === currentTarget)
+    editRuleParamTab.value = currentOption?.type === 'group' ? 'group' : 'node'
+  }
+
+  editRuleParamDropdownOpen.value = !editRuleParamDropdownOpen.value
+}
+
+const selectEditRuleParam = (name: string) => {
+  editRuleForm.value.param = name
+  editRuleParamDropdownOpen.value = false
+}
+
 const openEditRule = (item: ProxyGroupRulePenetrationEntry) => {
   if (
     suppressRowClick.value ||
@@ -778,6 +948,8 @@ const openEditRule = (item: ProxyGroupRulePenetrationEntry) => {
     originalRule: item.raw,
     customGroupMode,
   }
+  editRuleParamSearch.value = ''
+  editRuleParamDropdownOpen.value = false
   editRuleDialogOpen.value = true
 }
 
@@ -1293,6 +1465,10 @@ watch(search, () => {
   searchTimer = window.setTimeout(() => {
     debouncedSearchRevision.value += 1
   }, SEARCH_DEBOUNCE_MS)
+})
+
+watch(editRuleDialogOpen, (open) => {
+  if (!open) editRuleParamDropdownOpen.value = false
 })
 
 watch(

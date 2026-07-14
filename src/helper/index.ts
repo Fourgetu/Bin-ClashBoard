@@ -9,7 +9,7 @@ import {
   proxyChainDirection,
   splitOverviewPage,
 } from '@/store/settings'
-import type { Connection } from '@/types'
+import type { Connection, Proxy } from '@/types'
 import dayjs from 'dayjs'
 import * as ipaddr from 'ipaddr.js'
 import { head } from 'lodash'
@@ -41,6 +41,9 @@ export const isProxyGroup = (name: string) => {
     PROXY_TYPE.Smart,
   ].includes(proxyNode.type.toLowerCase() as PROXY_TYPE)
 }
+
+export const isPassRuleProxy = (proxy: Pick<Proxy, 'name' | 'type'>) =>
+  proxy.name.trim().toUpperCase() === 'PASS-RULE' || proxy.type.trim().toLowerCase() === 'passrule'
 
 export const getHostFromConnection = (connection: Connection) => {
   const port = connection.metadata.destinationPort

@@ -27,6 +27,7 @@ const defaultOpenClashPreCustomRulesPath =
   '/etc/openclash/custom/openclash_custom_rules.list'
 const defaultOpenClashPostCustomRulesPath =
   '/etc/openclash/custom/openclash_custom_rules_2.list'
+const defaultNikkiUciConfigPath = '/etc/config/nikki'
 const openClashUciConfigPath =
   process.env.ZASHBOARD_OPENCLASH_UCI_PATH ||
   process.env.OPENCLASH_UCI_PATH ||
@@ -986,6 +987,48 @@ function parseUciValue(value) {
   return normalizedValue.split(/\s+/)[0] || ''
 }
 
+function getUciSectionOptionValue(content, sectionType, optionName) {
+  let isTargetSection = false
+  let optionValue = ''
+
+  String(content || '')
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const sectionMatch = /^\s*config\s+(\S+)/.exec(line)
+
+      if (sectionMatch) {
+        isTargetSection = sectionMatch[1] === sectionType
+        return
+      }
+
+      if (!isTargetSection) {
+        return
+      }
+
+      const optionMatch = new RegExp(`^\\s*option\\s+${optionName}(?:\\s+|=)(.+?)\\s*$`).exec(line)
+
+      if (optionMatch) {
+        optionValue = parseUciValue(optionMatch[1])
+      }
+    })
+
+  return optionValue
+}
+
+const isUciEnabled = (value) => ['1', 'true', 'yes', 'on', 'enabled'].includes(String(value || '').trim().toLowerCase())
+
+const isOpenWrtCustomRuleEnabled = (plugin, uciContent) => {
+  if (plugin === 'openclash') {
+    return isUciEnabled(getUciSectionOptionValue(uciContent, 'openclash', 'enable_custom_clash_rules'))
+  }
+
+  if (plugin === 'nikki') {
+    return isUciEnabled(getUciSectionOptionValue(uciContent, 'mixin', 'rule'))
+  }
+
+  return false
+}
+
 function getOpenClashConfigPathFromUci(content) {
   const configPaths = []
 
@@ -1239,6 +1282,49 @@ const getOpenWrtRuleSourceSnapshot = async (options = {}) => {
   return await withOpenWrtSshClient(config, (client) =>
     detectRuleSourceFromOpenWrtClient(client, config.plugin),
   )
+}
+
+const getOpenWrtPluginCustomRuleStatus = async (client, plugin) => {
+  const uciPath = plugin === 'openclash' ? openClashUciConfigPath : defaultNikkiUciConfigPath
+
+  if (!(await remoteFileExists(client, uciPath))) {
+    return null
+  }
+
+  return {
+    enabled: isOpenWrtCustomRuleEnabled(plugin, await readRemoteFile(client, uciPath)),
+    plugin,
+  }
+}
+
+const getOpenWrtCustomRuleStatus = async () => {
+  const config = readOpenWrtRuleSourceSshConfig()
+
+  if (!config.configured) {
+    return { enabled: false, plugin: '' }
+  }
+
+  return await withOpenWrtSshClient(config, async (client) => {
+    if (config.plugin !== 'auto') {
+      return (await getOpenWrtPluginCustomRuleStatus(client, config.plugin)) || {
+        enabled: false,
+        plugin: '',
+      }
+    }
+
+    const snapshot = await detectRuleSourceFromOpenWrtClient(client, 'auto').catch(() => null)
+    const plugins = snapshot ? [snapshot.plugin] : ['openclash', 'nikki']
+
+    for (const plugin of plugins) {
+      const status = await getOpenWrtPluginCustomRuleStatus(client, plugin)
+
+      if (status) {
+        return status
+      }
+    }
+
+    return { enabled: false, plugin: '' }
+  })
 }
 
 const assertRuleSourceReadyForSync = async () => {
@@ -1751,7 +1837,7 @@ const addProxyDomainRuleToYamlContent = (content, input = {}) => {
 
   let rulesNode = document.get('rules', true)
 
-  if (!rulesNode) {
+  if (!rulesNode || rulesNode.value === null) {
     document.set('rules', document.createNode([]))
     rulesNode = document.get('rules', true)
   }
@@ -2323,6 +2409,10 @@ const parseProxyDomainCustomRulesFromYamlContent = (
   const rulesNode = document.get('rules', true)
 
   if (!isYamlSeq(rulesNode)) {
+    if (options.standalone) {
+      return []
+    }
+
     throw new Error('YAML rules must be an array.')
   }
 
@@ -4449,6 +4539,14 @@ app.get('/api/openwrt-rule-source/config', (_req, res) => {
   })
 })
 
+app.get('/api/proxy-domain-custom-sections', async (_req, res) => {
+  try {
+    res.json(await getOpenWrtCustomRuleStatus())
+  } catch {
+    res.json({ enabled: false, plugin: '' })
+  }
+})
+
 app.put('/api/openwrt-rule-source/config', (req, res) => {
   const config = normalizeOpenWrtRuleSourceSshConfigInput(req.body?.config || req.body)
 
@@ -5040,6 +5138,7 @@ export {
   extractRemoteYamlConfigPathsFromUci as extractRemoteYamlConfigPathsFromUciForTesting,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
   getWritableProxyDomainRulePath as getWritableProxyDomainRulePathForTesting,
+  isOpenWrtCustomRuleEnabled as isOpenWrtCustomRuleEnabledForTesting,
   normalizeWritableProxyDomainRuleInput as normalizeWritableProxyDomainRuleInputForTesting,
   parseProxyDomainCustomRulesFromYamlContent as parseProxyDomainCustomRulesFromYamlContentForTesting,
   reorderProxyDomainRulesInYamlContent as reorderProxyDomainRulesInYamlContentForTesting,

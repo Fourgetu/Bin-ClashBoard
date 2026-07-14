@@ -10,14 +10,8 @@ import {
   renderGroups,
 } from '@/composables/proxies'
 import { useCtrlsBar } from '@/composables/useCtrlsBar'
-import {
-  NOT_CONNECTED,
-  PROXY_SORT_TYPE,
-  PROXY_TAB_TYPE,
-  ROUTE_NAME,
-  SETTINGS_MENU_KEY,
-} from '@/constant'
-import { getColorForLatency } from '@/helper'
+import { PROXY_SORT_TYPE, PROXY_TAB_TYPE, ROUTE_NAME, SETTINGS_MENU_KEY } from '@/constant'
+import { isPassRuleProxy, isProxyGroup } from '@/helper'
 import { showNotification } from '@/helper/notification'
 import {
   buildProxyCategoryGroups,
@@ -36,15 +30,10 @@ import { activeConnections } from '@/store/connections'
 import {
   allProxiesLatencyTest,
   fetchProxies,
-  getLatencyByName,
-  getTestUrl,
   hasSmartGroup,
   proxiesFilter,
   proxiesTabShow,
-  proxyGroupLatencyTest,
-  proxyLatencyTest,
   proxyMap,
-  proxyNodesLatencyTest,
   proxyProviederList,
 } from '@/store/proxies'
 import { fetchRules } from '@/store/rules'
@@ -103,15 +92,11 @@ export default defineComponent({
     const isAddingDomainRule = ref(false)
     const isRestartingProxy = ref(false)
     const customRuleParamSearch = ref('')
-    const customRuleParamSort = ref<'default' | 'name-asc' | 'latency-asc' | 'latency-desc'>(
-      'default',
-    )
+    const customRuleParamTab = ref<'group' | 'node'>('group')
     const isCustomRuleParamDropdownOpen = ref(false)
-    const customRuleParamTestingMap = ref<Record<string, boolean>>({})
-    const isCustomRuleParamTestingAll = ref(false)
     const domainRuleForm = ref({
       value: '',
-      param: 'DIRECT',
+      param: '',
       type: 'DOMAIN-SUFFIX',
     })
     const { isLargeCtrlsBar } = useCtrlsBar()
@@ -181,7 +166,6 @@ export default defineComponent({
       name: string
       type: 'builtin' | 'group' | 'node'
       index: number
-      latency: number
       searchable: string
     }
     type DomainRuleValidationError = {
@@ -258,10 +242,6 @@ export default defineComponent({
           name: normalizedName,
           type,
           index: options.length,
-          latency:
-            type === 'builtin'
-              ? NOT_CONNECTED
-              : getLatencyByName(normalizedName, type === 'group' ? normalizedName : undefined),
           searchable: normalizedName.toLowerCase(),
         })
       }
@@ -270,7 +250,7 @@ export default defineComponent({
       append('REJECT', 'builtin')
       nodeGroups.value.forEach((name) => append(name, 'group'))
       Object.values(proxyMap.value).forEach((proxy) => {
-        if (!proxy?.all?.length) {
+        if (proxy && !isPassRuleProxy(proxy) && !isProxyGroup(proxy.name)) {
           append(proxy.name, 'node')
         }
       })
@@ -285,57 +265,18 @@ export default defineComponent({
           )
         : customRuleParamOptions.value
 
-      const builtins = filteredOptions.filter((option) => option.type === 'builtin')
-      const testableOptions = filteredOptions.filter((option) => option.type !== 'builtin')
+      const builtins =
+        customRuleParamTab.value === 'node'
+          ? filteredOptions.filter((option) => option.type === 'builtin')
+          : []
+      const selectableOptions = filteredOptions
+        .filter((option) => option.type === customRuleParamTab.value)
+        .sort((left, right) => left.index - right.index)
 
-      const getLatencyForSort = (option: CustomRuleParamOption) =>
-        option.latency === NOT_CONNECTED ? Number.POSITIVE_INFINITY : option.latency
-
-      if (customRuleParamSort.value === 'name-asc') {
-        testableOptions.sort((left, right) =>
-          left.name.localeCompare(right.name, undefined, {
-            numeric: true,
-            sensitivity: 'base',
-          }),
-        )
-      } else if (customRuleParamSort.value === 'latency-asc') {
-        testableOptions.sort((left, right) => {
-          const latencyDiff = getLatencyForSort(left) - getLatencyForSort(right)
-
-          return latencyDiff || left.name.localeCompare(right.name)
-        })
-      } else if (customRuleParamSort.value === 'latency-desc') {
-        testableOptions.sort((left, right) => {
-          const leftLatency = getLatencyForSort(left)
-          const rightLatency = getLatencyForSort(right)
-
-          if (!Number.isFinite(leftLatency) && !Number.isFinite(rightLatency)) {
-            return left.name.localeCompare(right.name)
-          }
-
-          if (!Number.isFinite(leftLatency)) {
-            return 1
-          }
-
-          if (!Number.isFinite(rightLatency)) {
-            return -1
-          }
-
-          const latencyDiff = rightLatency - leftLatency
-
-          return latencyDiff || left.name.localeCompare(right.name)
-        })
-      } else {
-        testableOptions.sort((left, right) => left.index - right.index)
-      }
-
-      return [...builtins, ...testableOptions]
+      return [...builtins, ...selectableOptions]
     })
     const selectedCustomRuleParamOption = computed(() =>
       customRuleParamOptions.value.find((option) => option.name === domainRuleForm.value.param),
-    )
-    const customRuleParamTestableOptions = computed(() =>
-      filteredCustomRuleParamOptions.value.filter((option) => option.type !== 'builtin'),
     )
     const selectedCustomGroupMode = computed(() => {
       if (domainGroupSelectedName.value === DOMAIN_GROUP_PRE_CUSTOM_KEY) {
@@ -524,12 +465,9 @@ export default defineComponent({
 
     const openAddDomainRuleModal = () => {
       if (!canAddDomainRule.value) return
-      if (
-        isSelectedCustomDomainGroup.value &&
-        !customRuleParamOptions.value.some((option) => option.name === domainRuleForm.value.param)
-      ) {
-        domainRuleForm.value.param = 'DIRECT'
-      }
+      domainRuleForm.value.param = ''
+      customRuleParamSearch.value = ''
+      customRuleParamTab.value = 'group'
       isCustomRuleParamDropdownOpen.value = false
       addDomainRuleModal.value = true
     }
@@ -537,65 +475,6 @@ export default defineComponent({
     const selectCustomRuleParam = (name: string) => {
       domainRuleForm.value.param = name
       isCustomRuleParamDropdownOpen.value = false
-    }
-
-    const isCustomRuleParamTesting = (name: string) =>
-      customRuleParamTestingMap.value[name] ?? false
-
-    const setCustomRuleParamTesting = (name: string, value: boolean) => {
-      customRuleParamTestingMap.value = {
-        ...customRuleParamTestingMap.value,
-        [name]: value,
-      }
-    }
-
-    const testCustomRuleParamOption = async (option: CustomRuleParamOption) => {
-      if (option.type === 'builtin' || isCustomRuleParamTesting(option.name)) return
-
-      setCustomRuleParamTesting(option.name, true)
-      try {
-        if (option.type === 'group') {
-          await proxyGroupLatencyTest(option.name)
-        } else {
-          await proxyLatencyTest(option.name, getTestUrl(option.name))
-        }
-      } catch {
-        // The existing API interceptor and latency helpers surface test failures.
-      } finally {
-        setCustomRuleParamTesting(option.name, false)
-      }
-    }
-
-    const testFilteredCustomRuleParams = async () => {
-      if (isCustomRuleParamTestingAll.value) return
-
-      const options = customRuleParamTestableOptions.value
-      if (options.length === 0) return
-
-      isCustomRuleParamTestingAll.value = true
-      options.forEach((option) => setCustomRuleParamTesting(option.name, true))
-
-      try {
-        const groups = options
-          .filter((option) => option.type === 'group')
-          .map((option) => option.name)
-        const nodes = options
-          .filter((option) => option.type === 'node')
-          .map((option) => option.name)
-
-        await Promise.allSettled([
-          ...groups.map((groupName) => proxyGroupLatencyTest(groupName)),
-          nodes.length
-            ? proxyNodesLatencyTest('domain-rule-param', nodes, {
-                displayName: t('params'),
-                keyName: `domain-rule-param-${customRuleParamSearch.value.trim() || 'all'}`,
-              })
-            : Promise.resolve(),
-        ])
-      } finally {
-        options.forEach((option) => setCustomRuleParamTesting(option.name, false))
-        isCustomRuleParamTestingAll.value = false
-      }
     }
 
     const restartProxyAndReloadDomainRules = async () => {
@@ -624,7 +503,8 @@ export default defineComponent({
     }
 
     const submitAddDomainRule = async () => {
-      if (isAddingDomainRule.value || !canAddDomainRule.value) return
+      if (isAddingDomainRule.value || !canAddDomainRule.value || !domainRuleForm.value.param.trim())
+        return
       const validationError = validateDomainRuleForm()
 
       if (validationError) {
@@ -1018,12 +898,16 @@ export default defineComponent({
                   <button
                     type="button"
                     class={[
-                      'select select-sm flex w-full items-center justify-between gap-2 pr-9 text-left',
+                      'select select-sm flex w-full cursor-pointer items-center justify-between gap-2 pr-9 text-left',
                       isCustomRuleParamDropdownOpen.value && 'select-primary',
                     ]}
-                    onClick={() =>
-                      (isCustomRuleParamDropdownOpen.value = !isCustomRuleParamDropdownOpen.value)
-                    }
+                    onClick={() => {
+                      if (!isCustomRuleParamDropdownOpen.value) {
+                        customRuleParamTab.value = 'group'
+                      }
+
+                      isCustomRuleParamDropdownOpen.value = !isCustomRuleParamDropdownOpen.value
+                    }}
                   >
                     <span class="min-w-0 flex-1 truncate">
                       {selectedCustomRuleParamOption.value?.name || domainRuleForm.value.param}
@@ -1039,40 +923,50 @@ export default defineComponent({
                   {isCustomRuleParamDropdownOpen.value && (
                     <div class="border-base-300 bg-base-100! absolute right-0 bottom-full left-0 z-[70] mb-2 rounded-md border [background-color:var(--color-base-100)] p-2 shadow-xl backdrop-blur-none!">
                       <div class="flex min-w-0 items-center gap-2">
+                        <div
+                          role="tablist"
+                          class="bg-base-200/80 inline-flex h-8 min-w-max shrink-0 items-center gap-1 rounded-md p-1"
+                        >
+                          <button
+                            type="button"
+                            role="tab"
+                            class={[
+                              'h-6 shrink-0 cursor-pointer rounded-md px-3 text-sm leading-6 font-medium whitespace-nowrap transition-colors',
+                              customRuleParamTab.value === 'group'
+                                ? 'bg-base-100 text-base-content shadow-sm'
+                                : 'text-base-content/60 hover:text-base-content',
+                            ]}
+                            onClick={() => {
+                              customRuleParamTab.value = 'group'
+                            }}
+                          >
+                            {t('proxyParamGroup')}
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            class={[
+                              'h-6 shrink-0 cursor-pointer rounded-md px-3 text-sm leading-6 font-medium whitespace-nowrap transition-colors',
+                              customRuleParamTab.value === 'node'
+                                ? 'bg-base-100 text-base-content shadow-sm'
+                                : 'text-base-content/60 hover:text-base-content',
+                            ]}
+                            onClick={() => {
+                              customRuleParamTab.value = 'node'
+                            }}
+                          >
+                            {t('proxyParamNode')}
+                          </button>
+                        </div>
                         <TextInput
                           class="min-w-0 flex-1"
                           v-model={customRuleParamSearch.value}
                           placeholder={t('search')}
                           clearable={true}
                         />
-                        <select
-                          class="select select-sm w-34 shrink-0"
-                          v-model={customRuleParamSort.value}
-                        >
-                          <option value="default">{t('defaultsort')}</option>
-                          <option value="name-asc">{t('nameasc')}</option>
-                          <option value="latency-asc">{t('latencyasc')}</option>
-                          <option value="latency-desc">{t('latencydesc')}</option>
-                        </select>
-                        <button
-                          type="button"
-                          class="btn btn-circle btn-sm shrink-0"
-                          disabled={
-                            isCustomRuleParamTestingAll.value ||
-                            customRuleParamTestableOptions.value.length === 0
-                          }
-                          onClick={testFilteredCustomRuleParams}
-                          title={t('latency')}
-                        >
-                          {isCustomRuleParamTestingAll.value ? (
-                            <span class="loading loading-spinner loading-sm"></span>
-                          ) : (
-                            <BoltIcon class="h-4 w-4" />
-                          )}
-                        </button>
                       </div>
 
-                      <div class="border-base-300/70 bg-base-100! mt-2 max-h-48 overflow-y-auto rounded-md border [background-color:var(--color-base-100)] backdrop-blur-none!">
+                      <div class="border-base-300/70 bg-base-100! mt-2 max-h-44 overflow-y-auto rounded-md border [background-color:var(--color-base-100)] backdrop-blur-none!">
                         {filteredCustomRuleParamOptions.value.length === 0 ? (
                           <div class="text-base-content/60 flex h-16 items-center justify-center text-sm">
                             {t('noData')}
@@ -1080,8 +974,6 @@ export default defineComponent({
                         ) : (
                           filteredCustomRuleParamOptions.value.map((option) => {
                             const selected = domainRuleForm.value.param === option.name
-                            const testable = option.type !== 'builtin'
-                            const latencyVisible = testable && option.latency !== NOT_CONNECTED
 
                             return (
                               <div
@@ -1093,14 +985,14 @@ export default defineComponent({
                               >
                                 <button
                                   type="button"
-                                  class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
                                   onClick={() => selectCustomRuleParam(option.name)}
                                 >
                                   <span class="h-4 w-4 shrink-0">
                                     {selected && <CheckIcon class="h-4 w-4" />}
                                   </span>
                                   <span class="min-w-0 flex-1 truncate">{option.name}</span>
-                                  {testable && (
+                                  {option.type !== 'builtin' && (
                                     <span class="text-base-content/45 shrink-0 text-xs">
                                       {option.type === 'group'
                                         ? t('proxyParamGroup')
@@ -1108,26 +1000,6 @@ export default defineComponent({
                                     </span>
                                   )}
                                 </button>
-                                {testable && (
-                                  <button
-                                    type="button"
-                                    class={[
-                                      'btn btn-ghost btn-xs h-7 min-h-7 w-16 shrink-0 px-1',
-                                      latencyVisible && getColorForLatency(option.latency),
-                                    ]}
-                                    disabled={isCustomRuleParamTesting(option.name)}
-                                    onClick={() => void testCustomRuleParamOption(option)}
-                                    title={t('latency')}
-                                  >
-                                    {isCustomRuleParamTesting(option.name) ? (
-                                      <span class="loading loading-dots loading-xs"></span>
-                                    ) : latencyVisible ? (
-                                      `${option.latency}ms`
-                                    ) : (
-                                      <BoltIcon class="h-4 w-4" />
-                                    )}
-                                  </button>
-                                )}
                               </div>
                             )
                           })
@@ -1152,7 +1024,11 @@ export default defineComponent({
                 <button
                   type="submit"
                   class="btn btn-primary btn-sm"
-                  disabled={isAddingDomainRule.value || !domainRuleForm.value.value.trim()}
+                  disabled={
+                    isAddingDomainRule.value ||
+                    !domainRuleForm.value.value.trim() ||
+                    !domainRuleForm.value.param.trim()
+                  }
                 >
                   {isAddingDomainRule.value && (
                     <span class="loading loading-spinner loading-sm"></span>
@@ -1166,7 +1042,7 @@ export default defineComponent({
       )
 
       const domainActions = (
-        <div class="proxy-domain-actions ml-auto flex shrink-0 items-center gap-2">
+        <div class="ml-auto flex shrink-0 items-center gap-2">
           <button
             type="button"
             class={[

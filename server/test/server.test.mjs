@@ -25,6 +25,7 @@ const {
   extractRemoteYamlConfigPathsFromUciForTesting,
   getWritableProxyDomainRulePathForTesting,
   getRequestAccessAuthStatusForTesting,
+  isOpenWrtCustomRuleEnabledForTesting,
   normalizeWritableProxyDomainRuleInputForTesting,
   parseProxyDomainCustomRulesFromYamlContentForTesting,
   reorderProxyDomainRulesInYamlContentForTesting,
@@ -342,6 +343,17 @@ test('proxy domain rule can be inserted into post custom rules', () => {
   )
 })
 
+test('proxy domain rule can be added to an empty custom rules key', () => {
+  const result = addProxyDomainRuleToYamlContentForTesting('rules:\n', {
+    value: 'new.example',
+    target: 'DIRECT',
+    customGroupMode: 'post',
+  })
+
+  assert.equal(result.changed, true)
+  assert.match(result.content, /rules:\n\s+- DOMAIN-SUFFIX,new\.example,DIRECT\n/)
+})
+
 test('remote proxy domain rule writes are limited to custom rule sections', () => {
   assert.throws(
     () =>
@@ -399,6 +411,23 @@ test('OpenClash custom rule sections use the files shown by the OpenClash editor
   )
 })
 
+test('custom rule section toggle is read from the OpenClash and Nikki UCI config', () => {
+  assert.equal(
+    isOpenWrtCustomRuleEnabledForTesting(
+      'openclash',
+      "config openclash 'config'\n  option enable_custom_clash_rules '1'\n",
+    ),
+    true,
+  )
+  assert.equal(
+    isOpenWrtCustomRuleEnabledForTesting(
+      'nikki',
+      "config mixin 'mixin'\n  option rule '0'\n",
+    ),
+    false,
+  )
+})
+
 test('OpenClash custom rule files are parsed from the YAML rules array only', () => {
   const entries = parseProxyDomainCustomRulesFromYamlContentForTesting(
     `mixed-port: 7890
@@ -420,6 +449,16 @@ rules:
   assert.deepEqual(
     entries.map((entry) => entry.line),
     [3, 4],
+  )
+})
+
+test('empty OpenClash custom rule files are treated as empty rule sections', () => {
+  assert.deepEqual(
+    parseProxyDomainCustomRulesFromYamlContentForTesting('', 'post', {
+      standalone: true,
+      source: '/etc/openclash/custom/openclash_custom_rules_2.list',
+    }),
+    [],
   )
 })
 
