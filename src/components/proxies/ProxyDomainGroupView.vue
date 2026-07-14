@@ -369,6 +369,22 @@
                   :placeholder="$t('search')"
                   :clearable="true"
                 />
+                <button
+                  type="button"
+                  class="btn btn-circle btn-sm shrink-0"
+                  :disabled="isEditRuleParamTestingAll || editRuleParamTestableOptions.length === 0"
+                  :title="$t('latency')"
+                  @click="testCurrentEditRuleParamTab"
+                >
+                  <span
+                    v-if="isEditRuleParamTestingAll"
+                    class="loading loading-spinner loading-sm"
+                  />
+                  <BoltIcon
+                    v-else
+                    class="h-4 w-4"
+                  />
+                </button>
               </div>
 
               <div
@@ -400,12 +416,26 @@
                       </span>
                       <span class="min-w-0 flex-1 truncate">{{ option.name }}</span>
                       <span
+                        v-if="option.description"
+                        class="text-base-content/55 shrink-0 text-xs"
+                      >
+                        {{ option.description }}
+                      </span>
+                      <span
                         v-if="option.type !== 'builtin'"
                         class="text-base-content/45 shrink-0 text-xs"
                       >
                         {{ option.type === 'group' ? $t('proxyParamGroup') : $t('proxyParamNode') }}
                       </span>
                     </button>
+                    <LatencyTag
+                      v-if="option.type !== 'builtin'"
+                      class="bg-base-200/50 hover:bg-base-200 shrink-0 cursor-pointer"
+                      :name="getEditRuleParamLatencyTarget(option)"
+                      :group-name="getEditRuleParamLatencyGroup(option)"
+                      :loading="isEditRuleParamTesting(option)"
+                      @click="testEditRuleParamOption(option)"
+                    />
                   </div>
                 </template>
               </div>
@@ -511,7 +541,7 @@ import {
   domainRulesReloadRevision,
   nodeGroups,
 } from '@/composables/proxies'
-import { isPassRuleProxy, isProxyGroup } from '@/helper'
+import { getProxyNodeProtocolDescription, isPassRuleProxy, isProxyGroup } from '@/helper'
 import { showNotification } from '@/helper/notification'
 import {
   DOMAIN_GROUP_CUSTOM_SOURCE,
@@ -520,18 +550,27 @@ import {
   isDomainGroupCustomKey,
 } from '@/helper/proxyDomainGroups'
 import { fetchServerApi } from '@/store/auth'
-import { proxyMap } from '@/store/proxies'
+import {
+  getIPv6ByName,
+  getNowProxyNodeName,
+  getTestUrl,
+  proxyLatencyTest,
+  proxyMap,
+  proxyNodesLatencyTest,
+} from '@/store/proxies'
 import type {
   ProxyGroupRulePenetrationEntry,
   ProxyGroupRulePenetrationFamily,
   ProxyGroupRulePenetrationSortKey,
 } from '@/store/proxyGroupRulePenetration'
 import { fetchRules, rules } from '@/store/rules'
+import { IPv6test } from '@/store/settings'
 import type { Rule } from '@/types'
 import {
   ArrowDownCircleIcon,
   ArrowUpCircleIcon,
   Bars3Icon,
+  BoltIcon,
   CheckIcon,
   ChevronDownIcon,
   QueueListIcon,
@@ -540,6 +579,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Draggable from 'vuedraggable'
+import LatencyTag from './LatencyTag.vue'
 import ProxyIcon from './ProxyIcon.vue'
 
 type GroupTabValue = Exclude<ProxyGroupRulePenetrationFamily, 'other'>
@@ -568,6 +608,7 @@ type CustomRuleParamOption = {
   type: 'builtin' | 'group' | 'node'
   index: number
   searchable: string
+  description?: string
 }
 
 type DomainGroupResponse = {
@@ -607,6 +648,8 @@ const editingEntry = ref<ProxyGroupRulePenetrationEntry | null>(null)
 const editRuleParamSearch = ref('')
 const editRuleParamTab = ref<'group' | 'node'>('group')
 const editRuleParamDropdownOpen = ref(false)
+const editRuleParamTesting = ref<Record<string, boolean>>({})
+const isEditRuleParamTestingAll = ref(false)
 const deleteRuleDialogOpen = ref(false)
 const isDeletingRule = ref(false)
 const deletingEntry = ref<ProxyGroupRulePenetrationEntry | null>(null)
@@ -699,7 +742,7 @@ const editRuleValuePlaceholder = computed(() => {
 const editRuleParamOptions = computed<CustomRuleParamOption[]>(() => {
   const options: CustomRuleParamOption[] = []
   const seen = new Set<string>()
-  const append = (name: string, type: CustomRuleParamOption['type']) => {
+  const append = (name: string, type: CustomRuleParamOption['type'], description?: string) => {
     const normalizedName = String(name || '').trim()
 
     if (!normalizedName || seen.has(normalizedName)) return
@@ -710,6 +753,7 @@ const editRuleParamOptions = computed<CustomRuleParamOption[]>(() => {
       type,
       index: options.length,
       searchable: normalizedName.toLowerCase(),
+      description,
     })
   }
 
@@ -717,7 +761,13 @@ const editRuleParamOptions = computed<CustomRuleParamOption[]>(() => {
   append('REJECT', 'builtin')
   nodeGroups.value.forEach((name) => append(name, 'group'))
   Object.values(proxyMap.value).forEach((proxy) => {
-    if (proxy && !isPassRuleProxy(proxy) && !isProxyGroup(proxy.name)) append(proxy.name, 'node')
+    if (proxy && !isPassRuleProxy(proxy) && !isProxyGroup(proxy.name)) {
+      append(
+        proxy.name,
+        'node',
+        getProxyNodeProtocolDescription(proxy, IPv6test.value && getIPv6ByName(proxy.name)),
+      )
+    }
   })
 
   return options
@@ -741,6 +791,9 @@ const filteredEditRuleParamOptions = computed(() => {
 })
 const selectedEditRuleParamOption = computed(() =>
   editRuleParamOptions.value.find((option) => option.name === editRuleForm.value.param),
+)
+const editRuleParamTestableOptions = computed(() =>
+  filteredEditRuleParamOptions.value.filter((option) => option.type !== 'builtin'),
 )
 
 const isSelectedCustomGroup = computed(() => isDomainGroupCustomKey(selectedGroupName.value))
@@ -907,6 +960,77 @@ const isEditableCustomRule = (item: ProxyGroupRulePenetrationEntry) =>
   isSelectedCustomGroup.value && editableRuleTypes.has(item.type)
 
 const isDeletableCustomRule = () => isSelectedCustomGroup.value
+
+const getEditRuleParamLatencyTarget = (option: CustomRuleParamOption) =>
+  option.type === 'group' ? getNowProxyNodeName(option.name) : option.name
+
+const getEditRuleParamLatencyGroup = (option: CustomRuleParamOption) =>
+  option.type === 'group' ? option.name : undefined
+
+const setEditRuleParamTesting = (option: CustomRuleParamOption, testing: boolean) => {
+  const key = `${option.type}:${option.name}`
+  editRuleParamTesting.value = {
+    ...editRuleParamTesting.value,
+    [key]: testing,
+  }
+}
+
+const isEditRuleParamTesting = (option: CustomRuleParamOption) =>
+  editRuleParamTesting.value[`${option.type}:${option.name}`] ?? false
+
+const testEditRuleParamOption = async (option: CustomRuleParamOption) => {
+  if (option.type === 'builtin' || isEditRuleParamTesting(option)) return
+
+  setEditRuleParamTesting(option, true)
+  try {
+    await proxyLatencyTest(
+      getEditRuleParamLatencyTarget(option),
+      getTestUrl(getEditRuleParamLatencyGroup(option)),
+    )
+  } catch {
+    // The latency helper shows the request result to the user.
+  } finally {
+    setEditRuleParamTesting(option, false)
+  }
+}
+
+const testCurrentEditRuleParamTab = async () => {
+  if (isEditRuleParamTestingAll.value) return
+
+  const options = editRuleParamTestableOptions.value
+  const nodesByUrl = new Map<string, Set<string>>()
+
+  options.forEach((option) => {
+    const node = getEditRuleParamLatencyTarget(option)
+
+    if (!node) return
+
+    const url = getTestUrl(getEditRuleParamLatencyGroup(option))
+    const nodes = nodesByUrl.get(url) || new Set<string>()
+    nodes.add(node)
+    nodesByUrl.set(url, nodes)
+  })
+
+  if (nodesByUrl.size === 0) return
+
+  isEditRuleParamTestingAll.value = true
+  options.forEach((option) => setEditRuleParamTesting(option, true))
+
+  try {
+    let testIndex = 0
+
+    for (const [url, nodes] of nodesByUrl) {
+      await proxyNodesLatencyTest('domain-rule-param', [...nodes], {
+        displayName: t('params'),
+        keyName: `domain-rule-param-${editRuleParamTab.value}-${testIndex++}`,
+        url,
+      })
+    }
+  } finally {
+    options.forEach((option) => setEditRuleParamTesting(option, false))
+    isEditRuleParamTestingAll.value = false
+  }
+}
 
 const toggleEditRuleParamDropdown = () => {
   if (!editRuleParamDropdownOpen.value) {

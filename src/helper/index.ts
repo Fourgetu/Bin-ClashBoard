@@ -45,6 +45,20 @@ export const isProxyGroup = (name: string) => {
 export const isPassRuleProxy = (proxy: Pick<Proxy, 'name' | 'type'>) =>
   proxy.name.trim().toUpperCase() === 'PASS-RULE' || proxy.type.trim().toLowerCase() === 'passrule'
 
+export const getProxyNodeProtocolDescription = (
+  proxy: Pick<Proxy, 'type' | 'udp' | 'xudp'>,
+  ipv6 = false,
+) => {
+  const protocol = proxy.type
+    .toLowerCase()
+    .replace('shadowsocks', 'ss')
+    .replace('hysteria', 'hy')
+    .replace('wireguard', 'wg')
+  const transport = proxy.udp ? (proxy.xudp ? 'xudp' : 'udp') : 'tcp'
+
+  return [protocol, transport, ipv6 ? 'IPv6' : ''].filter(Boolean).join(' / ')
+}
+
 export const getHostFromConnection = (connection: Connection) => {
   const port = connection.metadata.destinationPort
   const host =

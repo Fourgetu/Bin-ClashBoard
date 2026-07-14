@@ -1,8 +1,8 @@
 import { disconnectByIdAPI, isSingBox, updateProxyProviderAPI } from '@/api'
 import {
+  domainGroups,
   domainGroupSearch,
   domainGroupSelectedName,
-  domainGroups,
   domainRuleConfigChanged,
   domainRulesReloadRevision,
   nodeGroups,
@@ -11,7 +11,7 @@ import {
 } from '@/composables/proxies'
 import { useCtrlsBar } from '@/composables/useCtrlsBar'
 import { PROXY_SORT_TYPE, PROXY_TAB_TYPE, ROUTE_NAME, SETTINGS_MENU_KEY } from '@/constant'
-import { isPassRuleProxy, isProxyGroup } from '@/helper'
+import { getProxyNodeProtocolDescription, isPassRuleProxy, isProxyGroup } from '@/helper'
 import { showNotification } from '@/helper/notification'
 import {
   buildProxyCategoryGroups,
@@ -30,10 +30,15 @@ import { activeConnections } from '@/store/connections'
 import {
   allProxiesLatencyTest,
   fetchProxies,
+  getIPv6ByName,
+  getNowProxyNodeName,
+  getTestUrl,
   hasSmartGroup,
   proxiesFilter,
   proxiesTabShow,
+  proxyLatencyTest,
   proxyMap,
+  proxyNodesLatencyTest,
   proxyProviederList,
 } from '@/store/proxies'
 import { fetchRules } from '@/store/rules'
@@ -43,6 +48,7 @@ import {
   displayFinalOutbound,
   groupProxiesByProvider,
   hideUnavailableProxies,
+  IPv6test,
   manageHiddenGroup,
   minProxyCardWidth,
   providerProxyCategoryCollapseMap,
@@ -69,6 +75,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import DialogWrapper from '../common/DialogWrapper.vue'
 import TextInput from '../common/TextInput.vue'
+import LatencyTag from '../proxies/LatencyTag.vue'
 
 export default defineComponent({
   name: 'ProxiesCtrl',
@@ -94,6 +101,8 @@ export default defineComponent({
     const customRuleParamSearch = ref('')
     const customRuleParamTab = ref<'group' | 'node'>('group')
     const isCustomRuleParamDropdownOpen = ref(false)
+    const customRuleParamTesting = ref<Record<string, boolean>>({})
+    const isCustomRuleParamTestingAll = ref(false)
     const domainRuleForm = ref({
       value: '',
       param: '',
@@ -167,6 +176,7 @@ export default defineComponent({
       type: 'builtin' | 'group' | 'node'
       index: number
       searchable: string
+      description?: string
     }
     type DomainRuleValidationError = {
       content: string
@@ -230,7 +240,7 @@ export default defineComponent({
     const customRuleParamOptions = computed(() => {
       const options: CustomRuleParamOption[] = []
       const seen = new Set<string>()
-      const append = (name: string, type: CustomRuleParamOption['type']) => {
+      const append = (name: string, type: CustomRuleParamOption['type'], description?: string) => {
         const normalizedName = String(name || '').trim()
 
         if (!normalizedName || seen.has(normalizedName)) {
@@ -243,6 +253,7 @@ export default defineComponent({
           type,
           index: options.length,
           searchable: normalizedName.toLowerCase(),
+          description,
         })
       }
 
@@ -251,7 +262,11 @@ export default defineComponent({
       nodeGroups.value.forEach((name) => append(name, 'group'))
       Object.values(proxyMap.value).forEach((proxy) => {
         if (proxy && !isPassRuleProxy(proxy) && !isProxyGroup(proxy.name)) {
-          append(proxy.name, 'node')
+          append(
+            proxy.name,
+            'node',
+            getProxyNodeProtocolDescription(proxy, IPv6test.value && getIPv6ByName(proxy.name)),
+          )
         }
       })
 
@@ -277,6 +292,9 @@ export default defineComponent({
     })
     const selectedCustomRuleParamOption = computed(() =>
       customRuleParamOptions.value.find((option) => option.name === domainRuleForm.value.param),
+    )
+    const customRuleParamTestableOptions = computed(() =>
+      filteredCustomRuleParamOptions.value.filter((option) => option.type !== 'builtin'),
     )
     const selectedCustomGroupMode = computed(() => {
       if (domainGroupSelectedName.value === DOMAIN_GROUP_PRE_CUSTOM_KEY) {
@@ -475,6 +493,77 @@ export default defineComponent({
     const selectCustomRuleParam = (name: string) => {
       domainRuleForm.value.param = name
       isCustomRuleParamDropdownOpen.value = false
+    }
+
+    const getCustomRuleParamLatencyTarget = (option: CustomRuleParamOption) =>
+      option.type === 'group' ? getNowProxyNodeName(option.name) : option.name
+
+    const getCustomRuleParamLatencyGroup = (option: CustomRuleParamOption) =>
+      option.type === 'group' ? option.name : undefined
+
+    const setCustomRuleParamTesting = (option: CustomRuleParamOption, testing: boolean) => {
+      const key = `${option.type}:${option.name}`
+      customRuleParamTesting.value = {
+        ...customRuleParamTesting.value,
+        [key]: testing,
+      }
+    }
+
+    const isCustomRuleParamTesting = (option: CustomRuleParamOption) =>
+      customRuleParamTesting.value[`${option.type}:${option.name}`] ?? false
+
+    const testCustomRuleParamOption = async (option: CustomRuleParamOption) => {
+      if (option.type === 'builtin' || isCustomRuleParamTesting(option)) return
+
+      setCustomRuleParamTesting(option, true)
+      try {
+        await proxyLatencyTest(
+          getCustomRuleParamLatencyTarget(option),
+          getTestUrl(getCustomRuleParamLatencyGroup(option)),
+        )
+      } catch {
+        // The latency helper shows the request result to the user.
+      } finally {
+        setCustomRuleParamTesting(option, false)
+      }
+    }
+
+    const testCurrentCustomRuleParamTab = async () => {
+      if (isCustomRuleParamTestingAll.value) return
+
+      const options = customRuleParamTestableOptions.value
+      const nodesByUrl = new Map<string, Set<string>>()
+
+      options.forEach((option) => {
+        const node = getCustomRuleParamLatencyTarget(option)
+
+        if (!node) return
+
+        const url = getTestUrl(getCustomRuleParamLatencyGroup(option))
+        const nodes = nodesByUrl.get(url) || new Set<string>()
+        nodes.add(node)
+        nodesByUrl.set(url, nodes)
+      })
+
+      if (nodesByUrl.size === 0) return
+
+      isCustomRuleParamTestingAll.value = true
+      options.forEach((option) => setCustomRuleParamTesting(option, true))
+
+      try {
+        let testIndex = 0
+
+        for (const [url, nodes] of nodesByUrl) {
+          await proxyNodesLatencyTest('domain-rule-param', [...nodes], {
+            displayName: t('params'),
+            keyName: `domain-rule-param-${customRuleParamTab.value}-${testIndex++}`,
+            url,
+          })
+        }
+      } finally {
+        options.forEach((option) => setCustomRuleParamTesting(option, false))
+        isCustomRuleParamTestingAll.value = false
+      }
     }
 
     const restartProxyAndReloadDomainRules = async () => {
@@ -964,6 +1053,22 @@ export default defineComponent({
                           placeholder={t('search')}
                           clearable={true}
                         />
+                        <button
+                          type="button"
+                          class="btn btn-circle btn-sm shrink-0"
+                          disabled={
+                            isCustomRuleParamTestingAll.value ||
+                            customRuleParamTestableOptions.value.length === 0
+                          }
+                          title={t('latency')}
+                          onClick={() => void testCurrentCustomRuleParamTab()}
+                        >
+                          {isCustomRuleParamTestingAll.value ? (
+                            <span class="loading loading-spinner loading-sm" />
+                          ) : (
+                            <BoltIcon class="h-4 w-4" />
+                          )}
+                        </button>
                       </div>
 
                       <div class="border-base-300/70 bg-base-100! mt-2 max-h-44 overflow-y-auto rounded-md border [background-color:var(--color-base-100)] backdrop-blur-none!">
@@ -992,6 +1097,11 @@ export default defineComponent({
                                     {selected && <CheckIcon class="h-4 w-4" />}
                                   </span>
                                   <span class="min-w-0 flex-1 truncate">{option.name}</span>
+                                  {option.description && (
+                                    <span class="text-base-content/55 shrink-0 text-xs">
+                                      {option.description}
+                                    </span>
+                                  )}
                                   {option.type !== 'builtin' && (
                                     <span class="text-base-content/45 shrink-0 text-xs">
                                       {option.type === 'group'
@@ -1000,6 +1110,19 @@ export default defineComponent({
                                     </span>
                                   )}
                                 </button>
+                                {option.type !== 'builtin' && (
+                                  <div
+                                    class="shrink-0 cursor-pointer"
+                                    onClick={() => void testCustomRuleParamOption(option)}
+                                  >
+                                    <LatencyTag
+                                      class="bg-base-200/50 hover:bg-base-200 cursor-pointer"
+                                      name={getCustomRuleParamLatencyTarget(option)}
+                                      groupName={getCustomRuleParamLatencyGroup(option)}
+                                      loading={isCustomRuleParamTesting(option)}
+                                    />
+                                  </div>
+                                )}
                               </div>
                             )
                           })
