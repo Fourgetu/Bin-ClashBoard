@@ -956,7 +956,7 @@ export default defineComponent({
 
       const domainSearchInput = (
         <TextInput
-          class="w-full md:max-w-sm lg:max-w-md xl:max-w-lg"
+          class="min-w-0 flex-1 md:max-w-sm lg:max-w-md xl:max-w-lg"
           v-model={domainGroupSearch.value}
           placeholder={t('domainPenetrationSearchPlaceholder')}
           clearable={true}
@@ -1166,7 +1166,7 @@ export default defineComponent({
       )
 
       const domainActions = (
-        <div class="ml-auto flex shrink-0 items-center gap-2">
+        <div class="proxy-domain-actions ml-auto flex shrink-0 items-center gap-2">
           <button
             type="button"
             class={[
@@ -1305,8 +1305,8 @@ export default defineComponent({
               <div class="proxy-domain-tabs-row min-w-0 shrink-0">{tabs}</div>
               <div class="proxy-domain-search-row flex w-full min-w-0 items-center gap-2 md:w-auto md:flex-1">
                 {domainSearchInput}
+                {domainActions}
               </div>
-              {domainActions}
             </div>
           </div>
         )
