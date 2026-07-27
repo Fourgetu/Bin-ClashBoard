@@ -4,7 +4,7 @@
 
 Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 与 [zashboard](https://github.com/Zephyruso/zashboard) 继续演进的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `1.92-1`，由 Bin-ClashBoard 持续维护。
+当前版本为 `2.04-1`，由 Bin-ClashBoard 持续维护。
 
 ## 教学视频
 
@@ -17,6 +17,9 @@ Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/A
 - 支持背景图服务端持久化
 - 支持图标上传、拖拽、复制和预览
 - 支持规则缓存、域名/IP/关键字规则查询、链路展示和兜底规则判断
+- 支持 prepend/append 自定义规则的新增、编辑、删除和拖拽排序
+- 自定义规则目标可选择策略组或具体节点，并自动过滤内部 `PASS-RULE`
+- 节点列表可查看协议、连接模式和 IPv6 状态，支持当前标签页一键测速
 - 支持后端中转控制器数据，公网访问面板时无需直接暴露控制器端口
 - 支持 Docker 一键部署，适合个人和局域网环境
 
