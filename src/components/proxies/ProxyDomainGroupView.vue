@@ -539,7 +539,7 @@ import {
   domainGroupSelectedProvider,
   domainRuleConfigChanged,
   domainRulesReloadRevision,
-  nodeGroups,
+  selectableProxyGroups,
 } from '@/composables/proxies'
 import { getProxyNodeProtocolDescription, isPassRuleProxy, isProxyGroup } from '@/helper'
 import { showNotification } from '@/helper/notification'
@@ -759,7 +759,7 @@ const editRuleParamOptions = computed<CustomRuleParamOption[]>(() => {
 
   append('DIRECT', 'builtin')
   append('REJECT', 'builtin')
-  nodeGroups.value.forEach((name) => append(name, 'group'))
+  selectableProxyGroups.value.forEach((name) => append(name, 'group'))
   Object.values(proxyMap.value).forEach((proxy) => {
     if (proxy && !isPassRuleProxy(proxy) && !isProxyGroup(proxy.name)) {
       append(
