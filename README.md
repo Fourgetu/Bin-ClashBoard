@@ -4,7 +4,7 @@
 
 Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 与 [zashboard](https://github.com/Zephyruso/zashboard) 继续演进的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `2.04-3`，由 Bin-ClashBoard 持续维护。
+当前版本为 `2.06-1`，由 Bin-ClashBoard 持续维护。
 
 ## 教学视频
 
@@ -29,7 +29,6 @@ Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/A
 
 ![策略穿透](readme/icon-management.png)
 
-
 策略穿透可以直接展开策略组内部的节点和子策略链路，便于快速查看当前命中策略、候选节点状态和最终出口。
 
 ### 规则穿透
@@ -41,7 +40,6 @@ Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/A
 ### 图标管理
 
 ![图标管理](readme/rule-penetration.png)
-
 
 图标管理支持自定义图标映射、上传、复制和删除，可分别为策略组、节点组和其他项目配置专属图标。
 

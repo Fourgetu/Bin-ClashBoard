@@ -409,6 +409,8 @@ const zhTW: LANG_MESSAGE = {
   domainRuleInsertBeforeTypes: '插入到指定規則類型前',
   domainRuleInsertBeforeTypesValue: '指定規則類型',
   restartProxy: '重啟代理',
+  restartProxyCommandSent: '已發送重啟指令，請等待 30-60 秒後重新整理網頁',
+  restartProxyCommandFailed: '重啟指令發送失敗，請檢查 OpenWrt SSH 和服務狀態',
   restartProxyInProgress: '正在重啟代理…',
   restartProxyRefreshing: '代理已重啟，正在重新整理規則和節點…',
   restartProxySuccess: '代理重啟成功',

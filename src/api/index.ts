@@ -39,6 +39,9 @@ axios.interceptors.request.use((config) => {
 
 const ignoreNotificationUrls = ['/delay', '/healthcheck', '/weights']
 
+// Proxy restarts temporarily make the backend unavailable; avoid misleading error toasts then.
+export const suppressBackendErrorToasts = ref(false)
+
 axios.interceptors.response.use(
   null,
   (
@@ -68,11 +71,13 @@ axios.interceptors.response.use(
     } else if (!ignoreNotificationUrls.some((url) => error.config?.url?.endsWith(url))) {
       const errorMessage = error.response?.data?.message || error.message
 
-      showNotification({
-        key: errorMessage,
-        content: `${error.config?.url} \n${errorMessage}`,
-        type: 'alert-error',
-      })
+      if (!suppressBackendErrorToasts.value) {
+        showNotification({
+          key: errorMessage,
+          content: `${error.config?.url} \n${errorMessage}`,
+          type: 'alert-error',
+        })
+      }
       return Promise.reject(error)
     }
 
