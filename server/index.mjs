@@ -1,5 +1,6 @@
 ﻿import express from 'express'
 import { execFile } from 'node:child_process'
+import { parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -484,8 +485,7 @@ const createRuleSourceSshRequiredError = (detail = '') => {
   return error
 }
 
-const readOpenWrtRuleSourceSshConfig = () => {
-  const backend = readActiveBackendConfig()
+const readOpenWrtRuleSourceSshConfig = (backend = readActiveBackendConfig()) => {
   const host = parseStoredString(process.env.ZASHBOARD_OPENWRT_SSH_HOST || backend?.host)
   const port =
     Number.parseInt(
@@ -4649,6 +4649,7 @@ app.use('/api/proxy-domain-rules', express.json({ limit: '8kb' }))
 app.use('/api/background-image', express.json({ limit: '25mb' }))
 app.use('/api/proxy-group-rule-penetration', express.json({ limit: '5mb' }))
 app.use('/api/controller', express.raw({ type: '*/*', limit: '25mb' }))
+app.use('/api/diagnostics', express.json({ limit: '8kb' }))
 
 app.get('/api/auth/status', (req, res) => {
   const authStatus = getRequestAccessAuthStatus(req)
@@ -4731,6 +4732,61 @@ app.use((req, res, next) => {
   }
 
   sendAccessPasswordRequired(res)
+})
+
+registerDiagnostics(app, {
+  binary: mihomoBinaryPath,
+  tempRoot: path.join(dataDir, 'diagnostic-temp'),
+  controllerFetch,
+  readBackend: (uuid) => {
+    const backends = parseStoredJson(getStorageValueStatement.get(SETUP_API_LIST_KEY)?.value, [])
+    const backend = Array.isArray(backends) && backends.find((entry) => entry.uuid === uuid)
+    if (!backend) throw new Error('后端配置尚未同步，请保存后端设置后重试')
+    return backend
+  },
+  loadDevices: async (backend) => withOpenWrtSshClient(readOpenWrtRuleSourceSshConfig(backend), async (client) => {
+    return parseDhcpLeases(await readRemoteFile(client, '/tmp/dhcp.leases'))
+  }),
+  loadNodes: async (backend, signal) => {
+    const runtime = (await (await controllerFetch(backend, '/proxies', { signal })).json()).proxies || {}
+    const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
+    const parseDiagnosticConfig = (content) => {
+      try { return parseYaml(content) }
+      catch { throw new Error('节点配置 YAML 解析失败，请检查配置或订阅缓存格式') }
+    }
+    const readNodes = async (content, configPath, readFile, pathApi) => {
+      const config = parseDiagnosticConfig(content)
+      const nodes = [...(Array.isArray(config?.proxies) ? config.proxies : [])]
+      for (const provider of Object.values(config?.['proxy-providers'] || {})) {
+        signal.throwIfAborted()
+        let entries = Array.isArray(provider?.payload) ? provider.payload : []
+        if (provider?.path) {
+          const bases = [pathApi.dirname(configPath), pathApi.dirname(pathApi.dirname(configPath))]
+          for (const base of bases) {
+            const providerContent = await readFile(pathApi.resolve(base, provider.path)).catch(() => '')
+            if (!providerContent) continue
+            const parsed = parseDiagnosticConfig(providerContent)
+            entries = Array.isArray(parsed?.proxies) ? parsed.proxies : []
+            if (entries.length) break
+          }
+        }
+        const override = { ...(provider?.override || {}) }
+        const prefix = override['additional-prefix'] || ''
+        const suffix = override['additional-suffix'] || ''
+        delete override['additional-prefix']
+        delete override['additional-suffix']
+        nodes.push(...entries.map((node) => ({ ...node, ...override, name: `${prefix}${node.name}${suffix}` })))
+      }
+      return { nodes, runtime }
+    }
+    if (source) return readNodes(await fs.promises.readFile(source, 'utf8'), source, (file) => fs.promises.readFile(file, 'utf8'), path)
+    const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
+    if (!sshConfig.configured) throw new Error('请在后端设置中配置 OpenClash / Nikki SSH，以读取节点配置；也可为服务挂载 ZASHBOARD_DIAGNOSTICS_CONFIG')
+    return withOpenWrtSshClient(sshConfig, async (client) => {
+      const snapshot = await detectRuleSourceFromOpenWrtClient(client, sshConfig.plugin)
+      return readNodes(await readRemoteFile(client, snapshot.configPath), snapshot.configPath, (file) => readRemoteFile(client, file), path.posix)
+    })
+  },
 })
 
 app.get('/api/health', (_req, res) => {

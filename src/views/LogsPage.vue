@@ -28,8 +28,9 @@ const { paddingTop } = usePaddingForViews({
   offsetTop: 0,
   offsetBottom: 0,
 })
+const props = defineProps<{ embedded?: boolean }>()
 const virtualScrollerStyle = computed(() => ({
-  paddingTop: `${paddingTop.value}px`,
+  paddingTop: `${props.embedded ? 0 : paddingTop.value}px`,
 }))
 
 const renderLogs = computed(() => {

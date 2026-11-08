@@ -11,7 +11,6 @@ import { activeBackend } from '@/store/setup'
 import ConnectionsPage from '@/views/ConnectionsPage.vue'
 import HomePage from '@/views/HomePage.vue'
 import LoginPage from '@/views/LoginPage.vue'
-import LogsPage from '@/views/LogsPage.vue'
 import OverviewPage from '@/views/OverviewPage.vue'
 import ProxiesPage from '@/views/ProxiesPage.vue'
 import RulesPage from '@/views/RulesPage.vue'
@@ -52,7 +51,7 @@ const childrenRouter = [
   {
     path: 'logs',
     name: ROUTE_NAME.logs,
-    component: LogsPage,
+    redirect: { name: ROUTE_NAME.connections, query: { tab: 'logs' } },
   },
   {
     path: 'rules',
@@ -136,7 +135,10 @@ router.beforeEach((to, from) => {
     }
   }
 
-  if (!activeBackend.value && ![ROUTE_NAME.setup, ROUTE_NAME.login].includes(to.name as ROUTE_NAME)) {
+  if (
+    !activeBackend.value &&
+    ![ROUTE_NAME.setup, ROUTE_NAME.login].includes(to.name as ROUTE_NAME)
+  ) {
     return { name: ROUTE_NAME.setup }
   }
 })

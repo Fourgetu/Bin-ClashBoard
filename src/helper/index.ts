@@ -163,6 +163,7 @@ export const renderRoutes = computed(() => {
     return ![
       ROUTE_NAME.setup,
       ROUTE_NAME.login,
+      ROUTE_NAME.logs,
       !splitOverviewPage.value && ROUTE_NAME.overview,
     ].includes(r)
   })
