@@ -21,6 +21,7 @@ import {
   isPublicAddress,
   matchesProbeConnection,
   normalizeIntelligence,
+  openClashRuntimeConfigs,
   parseDhcpLeases,
   proxyGet,
   registerDiagnostics,
@@ -29,6 +30,25 @@ import {
 } from '../diagnostics.mjs'
 
 const rule = (type, payload, proxy = 'Proxy') => ({ type, payload, proxy })
+test('OpenClash diagnostics find the running generated YAML instead of a provider-less UCI source', () => {
+  assert.deepEqual(
+    openClashRuntimeConfigs(
+      [
+        '26321 root 1625m S /etc/openclash/clash -d /etc/openclash -f /etc/openclash/active.yaml',
+        '26400 root 12m S /usr/bin/nikki -f /etc/nikki/run/config.yaml',
+        '27000 root 2m S cat /etc/openclash/config/source.yaml',
+      ].join('\n'),
+    ),
+    ['/etc/openclash/active.yaml'],
+  )
+  assert.deepEqual(
+    openClashRuntimeConfigs(
+      '12 root /etc/openclash/mihomo --config="/etc/openclash/my config.yml"',
+    ),
+    ['/etc/openclash/my config.yml'],
+  )
+  assert.deepEqual(openClashRuntimeConfigs('no running core'), [])
+})
 const connection = (sourceIP, host = 'example.com') => ({
   id: sourceIP,
   metadata: { sourceIP, host },

@@ -12,6 +12,20 @@ import tls from 'node:tls'
 export const DOWNLOAD_BYTES = 10_000_000
 export const DOWNLOAD_URL = `https://speed.cloudflare.com/__down?bytes=${DOWNLOAD_BYTES}`
 
+// OpenClash adds provider cache paths to its generated runtime YAML, not the UCI source YAML.
+export function openClashRuntimeConfigs(processList) {
+  const paths = []
+  for (const line of String(processList).split(/\r?\n/)) {
+    if (!/(?:^|\s)\/[^\s]*openclash\/(?:clash|mihomo)(?:\s|$)/.test(line)) continue
+    const match = /(?:^|\s)(?:-f|--config|-config)(?:=|\s+)(?:"([^"\n]+)"|'([^'\n]+)'|(\S+))/.exec(
+      line,
+    )
+    const file = match?.[1] || match?.[2] || match?.[3]
+    if (file?.startsWith('/') && /\.ya?ml$/i.test(file)) paths.push(file)
+  }
+  return [...new Set(paths)]
+}
+
 // One bounded HTTPS GET through an explicit proxy. Never falls back to the server's connection.
 export function proxyGet(
   proxy,

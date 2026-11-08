@@ -1,6 +1,6 @@
 ﻿import express from 'express'
 import { execFile } from 'node:child_process'
-import { parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
+import { openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -4784,7 +4784,14 @@ registerDiagnostics(app, {
     if (!sshConfig.configured) throw new Error('请在后端设置中配置 OpenClash / Nikki SSH，以读取节点配置；也可为服务挂载 ZASHBOARD_DIAGNOSTICS_CONFIG')
     return withOpenWrtSshClient(sshConfig, async (client) => {
       const snapshot = await detectRuleSourceFromOpenWrtClient(client, sshConfig.plugin)
-      return readNodes(await readRemoteFile(client, snapshot.configPath), snapshot.configPath, (file) => readRemoteFile(client, file), path.posix)
+      let configPath = snapshot.configPath
+      if (snapshot.plugin === 'openclash') {
+        const processList = await sshExec(client, 'ps ww || ps w || ps', { maxBuffer: 256 * 1024 })
+        const candidates = openClashRuntimeConfigs(processList.stdout)
+        if (candidates.length > 1) throw new Error('发现多个 OpenClash 运行配置，无法确认检测来源')
+        if (candidates[0] && await remoteFileExists(client, candidates[0])) configPath = candidates[0]
+      }
+      return readNodes(await readRemoteFile(client, configPath), configPath, (file) => readRemoteFile(client, file), path.posix)
     })
   },
 })
