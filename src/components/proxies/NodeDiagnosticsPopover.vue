@@ -52,7 +52,7 @@
           <XMarkIcon class="size-3.5" />
         </button>
       </header>
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="node-diagnostics-content min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <p
           v-if="error"
           role="alert"
@@ -139,7 +139,7 @@
 
         <dl
           v-else-if="tab === 'info'"
-          class="grid grid-cols-[60px_minmax(0,1fr)] gap-x-3 gap-y-1 py-1 leading-4"
+          class="grid grid-cols-[60px_minmax(0,1fr)] gap-x-3 gap-y-0.5 py-1 leading-4"
         >
           <dt class="text-base-content/45">协议</dt>
           <dd>{{ node?.type || '—' }}</dd>
@@ -530,3 +530,12 @@ async function testLatency() {
   }
 }
 </script>
+
+<style scoped>
+.node-diagnostics-content {
+  scrollbar-width: none;
+}
+.node-diagnostics-content::-webkit-scrollbar {
+  display: none;
+}
+</style>
