@@ -1,5 +1,6 @@
 ﻿import express from 'express'
 import { execFile } from 'node:child_process'
+import { createDiagnosticImportStore, registerDiagnosticImports } from './diagnostic-config.mjs'
 import { createDiagnosticConfigCache, loadDiagnosticNodeDependencies, openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
@@ -4649,6 +4650,7 @@ app.use('/api/proxy-domain-rules', express.json({ limit: '8kb' }))
 app.use('/api/background-image', express.json({ limit: '25mb' }))
 app.use('/api/proxy-group-rule-penetration', express.json({ limit: '5mb' }))
 app.use('/api/controller', express.raw({ type: '*/*', limit: '25mb' }))
+app.use('/api/diagnostics/config', express.json({ limit: '8mb' }))
 app.use('/api/diagnostics', express.json({ limit: '8kb' }))
 
 app.get('/api/auth/status', (req, res) => {
@@ -4735,21 +4737,39 @@ app.use((req, res, next) => {
 })
 
 const readDiagnosticNodesCached = createDiagnosticConfigCache()
+const diagnosticImports = createDiagnosticImportStore(db)
+const readDiagnosticBackend = (uuid) => {
+  const backends = parseStoredJson(getStorageValueStatement.get(SETUP_API_LIST_KEY)?.value, [])
+  const backend = Array.isArray(backends) && backends.find((entry) => entry.uuid === uuid)
+  if (!backend) throw new Error('后端配置尚未同步，请保存后端设置后重试')
+  return backend
+}
+registerDiagnosticImports(app, {
+  store: diagnosticImports,
+  readBackend: readDiagnosticBackend,
+  readLiveNames: async (backend) => {
+    const signal = AbortSignal.timeout(10000)
+    const [proxies, providers] = await Promise.all([
+      controllerFetch(backend, '/proxies', { signal }).then(response => response.json()),
+      controllerFetch(backend, '/providers/proxies', { signal }).then(response => response.json()).catch(() => ({})),
+    ])
+    return new Set([
+      ...Object.entries(proxies.proxies || {}).filter(([, node]) => !node.all).map(([name]) => name),
+      ...Object.values(providers.providers || {}).flatMap(provider => (provider.proxies || []).map(node => node.name)),
+    ])
+  },
+})
 
 registerDiagnostics(app, {
   binary: mihomoBinaryPath,
   tempRoot: path.join(dataDir, 'diagnostic-temp'),
   controllerFetch,
-  readBackend: (uuid) => {
-    const backends = parseStoredJson(getStorageValueStatement.get(SETUP_API_LIST_KEY)?.value, [])
-    const backend = Array.isArray(backends) && backends.find((entry) => entry.uuid === uuid)
-    if (!backend) throw new Error('后端配置尚未同步，请保存后端设置后重试')
-    return backend
-  },
+  readBackend: readDiagnosticBackend,
   loadDevices: async (backend) => withOpenWrtSshClient(readOpenWrtRuleSourceSshConfig(backend), async (client) => {
     return parseDhcpLeases(await readRemoteFile(client, '/tmp/dhcp.leases'))
   }),
   loadNodes: async (backend, signal, { refresh = false, name } = {}) => {
+    const importedNodes = diagnosticImports.read(backend)
     const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
     const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
     const [runtimeData, providerData] = await Promise.all([
@@ -4765,6 +4785,11 @@ registerDiagnostics(app, {
       }
     }
     const selectorState = Object.entries(runtime).filter(([,node]) => node.now).map(([name,node]) => [name,node.now])
+    if (importedNodes) {
+      if (name && !Object.hasOwn(runtime, name) && !providerOwners.has(name))
+        throw new Error('当前后端已没有该节点，请刷新节点列表并重新导入对应配置')
+      return { nodes: importedNodes, runtime }
+    }
     const cacheKey = createHash('sha256').update(JSON.stringify([backend.uuid, source, sshConfig, name, selectorState])).digest('hex')
     const loadConfig = async (configSignal) => {
       const parseDiagnosticConfig = (content) => {
@@ -4800,7 +4825,7 @@ registerDiagnostics(app, {
         return selectedNodes
       }
       if (source) return readNodes(await fs.promises.readFile(source, 'utf8'), source, (file) => fs.promises.readFile(file, 'utf8'), path)
-      if (!sshConfig.configured) throw new Error('请在后端设置中配置 OpenClash / Nikki SSH，以读取节点配置；也可为服务挂载 ZASHBOARD_DIAGNOSTICS_CONFIG')
+      if (!sshConfig.configured) throw new Error('请在「编辑后端 → 节点检测配置」导入此客户端的 YAML；软路由也可配置 OpenClash / Nikki SSH')
       return withOpenWrtSshClient(sshConfig, async (client) => {
         let configPath
         if (sshConfig.plugin !== 'nikki') {

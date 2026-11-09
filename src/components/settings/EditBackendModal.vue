@@ -69,6 +69,13 @@
           </div>
         </div>
 
+        <DiagnosticConfigImport
+          v-if="selectedBackend"
+          :key="selectedBackend.uuid"
+          :backend-uuid="selectedBackend.uuid"
+          :disabled="diagnosticAddressChanged"
+        />
+
         <div class="border-base-content/10 flex flex-col gap-3 border-t pt-3">
           <div class="text-sm font-medium">{{ t('ruleSourceSsh') }}</div>
           <div class="grid gap-3 sm:grid-cols-2">
@@ -165,6 +172,7 @@ import { activeBackend, backendList, updateBackend } from '@/store/setup'
 import type { Backend } from '@/types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import DiagnosticConfigImport from './DiagnosticConfigImport.vue'
 
 interface Props {
   modelValue: boolean
@@ -195,6 +203,11 @@ const ruleSourceSshStatus = ref('')
 const selectedBackend = computed(() => {
   return backendList.value.find((b) => b.uuid === editingBackendUuid.value) || null
 })
+const diagnosticAddressChanged = computed(() =>
+  (['host', 'port', 'protocol', 'secondaryPath'] as const).some(
+    (key) => (editForm.value?.[key] || '') !== (selectedBackend.value?.[key] || ''),
+  ),
+)
 
 watch(
   () => props.modelValue,
