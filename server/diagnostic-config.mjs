@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { parse } from 'yaml'
 
 export const IMPORT_LIMIT = 6 * 1024 * 1024
+const SUBSCRIPTION_TIMEOUT = 15_000
 const record = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const fail = (message) => { throw new Error(message) }
 
@@ -32,8 +33,108 @@ export function previewDiagnosticImport(text) {
   return {
     providers: Object.entries(providersOf(config)).map(([name, provider]) => ({
       name, needsFile: !Array.isArray(provider.payload) || !provider.payload.length,
+      canDownload: provider.type === 'http' && typeof provider.url === 'string' && /^https?:\/\//i.test(provider.url),
     })),
   }
+}
+
+function subscriptionUrl(value) {
+  try {
+    const url = new URL(value)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error()
+    return url
+  } catch { fail('订阅地址无效，仅支持 HTTP / HTTPS 地址') }
+}
+
+// Called only by an explicit import request. Never execute uploaded paths or use
+// the controller secret for subscription requests. Bound decompressed bytes too.
+export async function downloadProvider(provider, { signal, consume }) {
+  let url = subscriptionUrl(provider.url)
+  let headers = new Headers({ 'User-Agent': 'mihomo', Accept: 'application/yaml, text/yaml, */*' })
+  if (record(provider.header)) {
+    for (const [name, value] of Object.entries(provider.header)) {
+      if (/^(host|content-length|connection|transfer-encoding|upgrade|proxy-.*)$/i.test(name)) continue
+      const values = Array.isArray(value) ? value : [value]
+      if (!values.every(item => typeof item === 'string')) fail('订阅请求头格式无效')
+      headers.set(name, values.join(', '))
+    }
+  }
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    const response = await fetch(url, { headers, signal, redirect: 'manual' })
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      await response.body?.cancel()
+      const location = response.headers.get('location')
+      if (!location || redirects === 3) fail('订阅重定向过多或地址缺失')
+      const next = subscriptionUrl(new URL(location, url).href)
+      if (url.protocol === 'https:' && next.protocol !== 'https:') fail('订阅重定向降级为 HTTP')
+      if (next.origin !== url.origin) headers = new Headers({ 'User-Agent': 'mihomo', Accept: 'application/yaml, text/yaml, */*' })
+      url = next
+      continue
+    }
+    if (!response.ok) {
+      await response.body?.cancel()
+      fail(`订阅返回 HTTP ${response.status}`)
+    }
+    if (Number(response.headers.get('content-length')) > IMPORT_LIMIT) {
+      await response.body?.cancel()
+      fail('订阅文件超过 6 MB')
+    }
+    const chunks = []
+    for await (const chunk of response.body) {
+      consume(chunk.byteLength)
+      chunks.push(chunk)
+    }
+    return Buffer.concat(chunks).toString('utf8')
+  }
+}
+
+export async function resolveDiagnosticImport(body, { signal, download = downloadProvider } = {}) {
+  const { configText, providerFiles = {} } = body
+  if (!record(providerFiles)) fail('订阅缓存格式无效')
+  const config = parseConfig(configText)
+  const files = Object.assign(Object.create(null), providerFiles)
+  let total = Buffer.byteLength(configText) + Object.values(files).reduce((size, text) => size + Buffer.byteLength(String(text)), 0)
+  const consume = size => {
+    total += size
+    if (total > IMPORT_LIMIT) fail('配置和订阅缓存合计不能超过 6 MB')
+  }
+  consume(0)
+  const pending = Object.entries(providersOf(config)).filter(([name, provider]) =>
+    Object.hasOwn(files, name) || !Array.isArray(provider.payload) || !provider.payload.length)
+  const failures = new Map()
+  let index = 0
+  await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
+    while (index < pending.length) {
+      signal?.throwIfAborted()
+      const [name, provider] = pending[index++]
+      const uploaded = Object.hasOwn(files, name)
+      if (!uploaded && (provider.type !== 'http' || !provider.url)) {
+        failures.set(name, '此订阅仅有本地路径或缺少地址，请补充对应的节点缓存 YAML')
+        continue
+      }
+      try {
+        const timeout = AbortSignal.timeout(SUBSCRIPTION_TIMEOUT)
+        const text = uploaded ? files[name] : await download(provider, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, consume })
+        const parsed = parseConfig(text)
+        const nodes = Array.isArray(parsed) ? parsed : parsed.proxies
+        if (!Array.isArray(nodes) || !nodes.length) fail('订阅文件缺少实际 proxies 节点，请勿重复选择主配置')
+        files[name] = text
+      } catch (error) {
+        if (signal?.aborted) throw error
+        // Network errors may contain signed subscription URLs; only expose our
+        // own fixed messages, never the raw transport/parser error.
+        const reason = /^(订阅|配置和订阅缓存|YAML 格式)/.test(error.message)
+          ? error.message : '订阅读取失败或超时，请重试或补充对应的节点缓存 YAML'
+        failures.set(name, reason)
+      }
+    }
+  }))
+  if (failures.size) {
+    const error = new Error('部分订阅未能读取。可重试导入，或仅补充下列订阅的节点缓存 YAML；原有配置未修改。')
+    error.providers = pending.filter(([name]) => failures.has(name)).map(([name]) => ({ name, reason: failures.get(name) }))
+    throw error
+  }
+  return parseDiagnosticImport({ configText, providerFiles: files })
 }
 
 export function parseDiagnosticImport({ configText, providerFiles = {} }) {
@@ -112,23 +213,27 @@ export function createDiagnosticImportStore(db) {
   }
 }
 
-export function registerDiagnosticImports(app, { store, readBackend, readLiveNames }) {
+export function registerDiagnosticImports(app, { store, readBackend, readLiveNames, download }) {
   const endpoint = operation => async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
+    const controller = new AbortController()
+    const onClose = () => { if (!res.writableEnded) controller.abort() }
+    res.on('close', onClose)
     try {
       const backend = readBackend(req.body?.backendUuid)
-      res.json(await operation(req.body || {}, backend))
+      res.json(await operation(req.body || {}, backend, controller.signal))
     } catch (error) {
-      res.status(400).json({ message: error.message || '配置导入失败' })
-    }
+      if (!controller.signal.aborted) res.status(400).json({ message: error.message || '配置导入失败', ...(error.providers ? { providers: error.providers } : {}) })
+    } finally { res.off('close', onClose) }
   }
   app.post('/api/diagnostics/config/status', endpoint((_, backend) => store.status(backend)))
   app.post('/api/diagnostics/config/preview', endpoint(body => previewDiagnosticImport(body.configText)))
-  app.post('/api/diagnostics/config/import', endpoint(async (body, backend) => {
-    const nodes = parseDiagnosticImport(body)
+  app.post('/api/diagnostics/config/import', endpoint(async (body, backend, signal) => {
+    const nodes = await resolveDiagnosticImport(body, { signal, download })
     const names = await readLiveNames(backend)
     const matchedCount = nodes.filter(node => names.has(node.name)).length
     if (!matchedCount) fail('配置中的节点名称与此后端不匹配，请导入该客户端当前使用的配置')
+    signal.throwIfAborted()
     return { ...store.save(backend, nodes), matchedCount }
   }))
   app.post('/api/diagnostics/config/remove', endpoint((_, backend) => store.remove(backend)))
