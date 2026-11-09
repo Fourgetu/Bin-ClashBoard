@@ -545,8 +545,10 @@ async function refreshTab() {
   const { name, groupName } = selection.value
   if (tab.value === 'latency') await checkNode(name, groupName, 'latency', true)
   else if (tab.value === 'info') {
-    await checkNode(name, groupName, 'info', true)
-    await checkNode(name, groupName, 'intelligence', true)
+    await Promise.all([
+      checkNode(name, groupName, 'info', true),
+      checkNode(name, groupName, 'intelligence', true),
+    ])
   } else if (tab.value === 'risk') await checkNode(name, groupName, 'intelligence', true)
 }
 async function run(kind: 'download') {

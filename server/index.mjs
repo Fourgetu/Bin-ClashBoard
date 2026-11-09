@@ -1,6 +1,6 @@
 ﻿import express from 'express'
 import { execFile } from 'node:child_process'
-import { openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
+import { createDiagnosticConfigCache, openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -4734,6 +4734,8 @@ app.use((req, res, next) => {
   sendAccessPasswordRequired(res)
 })
 
+const readDiagnosticNodesCached = createDiagnosticConfigCache()
+
 registerDiagnostics(app, {
   binary: mihomoBinaryPath,
   tempRoot: path.join(dataDir, 'diagnostic-temp'),
@@ -4747,52 +4749,68 @@ registerDiagnostics(app, {
   loadDevices: async (backend) => withOpenWrtSshClient(readOpenWrtRuleSourceSshConfig(backend), async (client) => {
     return parseDhcpLeases(await readRemoteFile(client, '/tmp/dhcp.leases'))
   }),
-  loadNodes: async (backend, signal) => {
-    const runtime = (await (await controllerFetch(backend, '/proxies', { signal })).json()).proxies || {}
+  loadNodes: async (backend, signal, { refresh = false } = {}) => {
     const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
-    const parseDiagnosticConfig = (content) => {
-      try { return parseYaml(content) }
-      catch { throw new Error('节点配置 YAML 解析失败，请检查配置或订阅缓存格式') }
-    }
-    const readNodes = async (content, configPath, readFile, pathApi) => {
-      const config = parseDiagnosticConfig(content)
-      const nodes = [...(Array.isArray(config?.proxies) ? config.proxies : [])]
-      for (const provider of Object.values(config?.['proxy-providers'] || {})) {
-        signal.throwIfAborted()
-        let entries = Array.isArray(provider?.payload) ? provider.payload : []
-        if (provider?.path) {
-          const bases = [pathApi.dirname(configPath), pathApi.dirname(pathApi.dirname(configPath))]
-          for (const base of bases) {
-            const providerContent = await readFile(pathApi.resolve(base, provider.path)).catch(() => '')
-            if (!providerContent) continue
-            const parsed = parseDiagnosticConfig(providerContent)
-            entries = Array.isArray(parsed?.proxies) ? parsed.proxies : []
-            if (entries.length) break
-          }
-        }
-        const override = { ...(provider?.override || {}) }
-        const prefix = override['additional-prefix'] || ''
-        const suffix = override['additional-suffix'] || ''
-        delete override['additional-prefix']
-        delete override['additional-suffix']
-        nodes.push(...entries.map((node) => ({ ...node, ...override, name: `${prefix}${node.name}${suffix}` })))
-      }
-      return { nodes, runtime }
-    }
-    if (source) return readNodes(await fs.promises.readFile(source, 'utf8'), source, (file) => fs.promises.readFile(file, 'utf8'), path)
     const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
-    if (!sshConfig.configured) throw new Error('请在后端设置中配置 OpenClash / Nikki SSH，以读取节点配置；也可为服务挂载 ZASHBOARD_DIAGNOSTICS_CONFIG')
-    return withOpenWrtSshClient(sshConfig, async (client) => {
-      const snapshot = await detectRuleSourceFromOpenWrtClient(client, sshConfig.plugin)
-      let configPath = snapshot.configPath
-      if (snapshot.plugin === 'openclash') {
-        const processList = await sshExec(client, 'ps ww || ps w || ps', { maxBuffer: 256 * 1024 })
-        const candidates = openClashRuntimeConfigs(processList.stdout)
-        if (candidates.length > 1) throw new Error('发现多个 OpenClash 运行配置，无法确认检测来源')
-        if (candidates[0] && await remoteFileExists(client, candidates[0])) configPath = candidates[0]
+    const cacheKey = createHash('sha256').update(JSON.stringify([backend.uuid, source, sshConfig])).digest('hex')
+    const loadConfig = async (configSignal) => {
+      const parseDiagnosticConfig = (content) => {
+        try { return parseYaml(content) }
+        catch { throw new Error('节点配置 YAML 解析失败，请检查配置或订阅缓存格式') }
       }
-      return readNodes(await readRemoteFile(client, configPath), configPath, (file) => readRemoteFile(client, file), path.posix)
-    })
+      const readNodes = async (content, configPath, readFile, pathApi) => {
+        const config = parseDiagnosticConfig(content)
+        const nodes = [...(Array.isArray(config?.proxies) ? config.proxies : [])]
+        const providers = Object.values(config?.['proxy-providers'] || {})
+        const readProvider = async (provider) => {
+          configSignal.throwIfAborted()
+          let entries = Array.isArray(provider?.payload) ? provider.payload : []
+          if (provider?.path) {
+            const bases = [pathApi.dirname(configPath), pathApi.dirname(pathApi.dirname(configPath))]
+            for (const base of bases) {
+              const providerContent = await readFile(pathApi.resolve(base, provider.path)).catch(() => '')
+              if (!providerContent) continue
+              const parsed = parseDiagnosticConfig(providerContent)
+              entries = Array.isArray(parsed?.proxies) ? parsed.proxies : []
+              if (entries.length) break
+            }
+          }
+          const override = { ...(provider?.override || {}) }
+          const prefix = override['additional-prefix'] || ''
+          const suffix = override['additional-suffix'] || ''
+          delete override['additional-prefix']
+          delete override['additional-suffix']
+          return entries.map((node) => ({ ...node, ...override, name: `${prefix}${node.name}${suffix}` }))
+        }
+        // Bound SSH channels while avoiding a round trip per provider in series.
+        for (let offset = 0; offset < providers.length; offset += 4) {
+          const batches = await Promise.all(providers.slice(offset, offset + 4).map(readProvider))
+          nodes.push(...batches.flat())
+        }
+        configSignal.throwIfAborted()
+        return nodes
+      }
+      if (source) return readNodes(await fs.promises.readFile(source, 'utf8'), source, (file) => fs.promises.readFile(file, 'utf8'), path)
+      if (!sshConfig.configured) throw new Error('请在后端设置中配置 OpenClash / Nikki SSH，以读取节点配置；也可为服务挂载 ZASHBOARD_DIAGNOSTICS_CONFIG')
+      return withOpenWrtSshClient(sshConfig, async (client) => {
+        let configPath
+        if (sshConfig.plugin !== 'nikki') {
+          const processList = await sshExec(client, 'ps ww || ps w || ps', { maxBuffer: 256 * 1024 })
+          const candidates = openClashRuntimeConfigs(processList.stdout)
+          if (candidates.length > 1) throw new Error('发现多个 OpenClash 运行配置，无法确认检测来源')
+          configPath = candidates[0]
+        }
+        if (!configPath) configPath = (await detectRuleSourceFromOpenWrtClient(client, sshConfig.plugin)).configPath
+        return readNodes(await readRemoteFile(client, configPath), configPath, (file) => readRemoteFile(client, file), path.posix)
+      })
+    }
+    // Selector state must stay live even when the config snapshot is reused.
+    const [nodes, response] = await Promise.all([
+      readDiagnosticNodesCached(cacheKey, loadConfig, signal, refresh),
+      controllerFetch(backend, '/proxies', { signal }),
+    ])
+    const runtime = (await response.json()).proxies || {}
+    return { nodes, runtime }
   },
 })
 

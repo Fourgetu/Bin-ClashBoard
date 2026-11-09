@@ -62,7 +62,6 @@ export const diagnosticsBusy = computed(() =>
 )
 const pending = new Map<string, Promise<void>>()
 const controllers = new Map<string, AbortController>()
-let queue = Promise.resolve()
 let closeTimer: ReturnType<typeof setTimeout> | undefined
 export function keepNodeDiagnosticsOpen() {
   clearTimeout(closeTimer)
@@ -119,9 +118,9 @@ export function checkNode(
   const controller = new AbortController()
   controllers.set(requestKey, controller)
   const testUrl = getTestUrl(groupName)
-  // Core latency requests do not use the isolated probe, so a click can run
-  // immediately while metadata queries wait in their own queue.
-  const task = (kind === 'latency' ? Promise.resolve() : queue).then(async () => {
+  // The server shares config reads and queues isolated probes. Basic info and
+  // core latency can return without waiting for external intelligence lookups.
+  const task = Promise.resolve().then(async () => {
     try {
       if (backendUuid !== activeUuid.value) {
         delete checks[key][kind]
@@ -132,7 +131,7 @@ export function checkNode(
       else {
         const value = await diagnosticsRequest<NodeInfo | Intelligence | DownloadResult>(
           'node',
-          { name, kind, backendUuid },
+          { name, kind, backendUuid, refresh: force },
           controller.signal,
         )
         saveNodeResult(key, kind, value)
@@ -150,7 +149,6 @@ export function checkNode(
     }
   })
   pending.set(requestKey, task)
-  if (kind !== 'latency') queue = task
   return task
 }
 export function cancelNodeDownload() {

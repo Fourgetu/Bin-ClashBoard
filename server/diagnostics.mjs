@@ -402,6 +402,38 @@ export function parseDhcpLeases(content) {
     })
 }
 
+// Share config reads between info/risk requests. Caller cancellation must not
+// abort another caller's read. Secrets stay in memory, for a short bounded TTL.
+export function createDiagnosticConfigCache({ ttlMs = 10_000, now = Date.now } = {}) {
+  const values = new Map()
+  const loading = new Map()
+  return async (key, loader, signal, refresh = false) => {
+    signal?.throwIfAborted()
+    const cached = values.get(key)
+    if (!refresh && cached && cached.expires > now()) return cached.value
+    let task = loading.get(key)
+    if (!task) {
+      task = Promise.resolve()
+        .then(() => loader(AbortSignal.timeout(15_000)))
+        .then((value) => {
+          values.delete(key)
+          values.set(key, { value, expires: now() + ttlMs })
+          if (values.size > 8) values.delete(values.keys().next().value)
+          return value
+        })
+        .finally(() => loading.delete(key))
+      loading.set(key, task)
+    }
+    if (!signal) return task
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      task.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+      if (signal.aborted) abort()
+    })
+  }
+}
+
 // Keep isolated probes serial across all browsers, without rejecting a second
 // query just because another client is still checking a node.
 export function createProbeQueue() {
@@ -451,7 +483,7 @@ export function diagnosticsErrorMessage(error) {
 
 export function registerDiagnostics(
   app,
-  { readBackend, loadNodes, loadDevices, controllerFetch, binary, tempRoot },
+  { readBackend, loadNodes, loadDevices, controllerFetch, binary, tempRoot, runProbe = withProbe },
 ) {
   const enqueueProbe = createProbeQueue()
   const endpoint = (operation) => async (req, res) => {
@@ -484,32 +516,38 @@ export function registerDiagnostics(
         !['info', 'intelligence', 'download'].includes(kind)
       )
         throw new Error('无效的节点检测请求')
-      return enqueueProbe(async () => {
-        const { nodes, runtime } = await loadNodes(backend, signal)
-        const selected = selectProbeNodes(nodes, name, runtime)
-        const node = selected.find((entry) => entry.name === name)
-        if (!node || node.type === 'select') throw new Error('请选择实际节点，不支持对策略组检测')
-        if (kind === 'info') {
-          let addresses = [],
-            dnsError = ''
-          try {
-            addresses = await resolveEntry(node.server)
-          } catch {
-            dnsError = '面板服务器无法解析入口域名'
-          }
-          return {
-            server: node.server || '',
-            port: node.port || '',
-            protocol: node.type,
-            udp: node.udp ?? null,
-            addresses,
-            dnsError,
-            checkedAt: new Date().toISOString(),
-          }
+      const started = performance.now()
+      const { nodes, runtime } = await loadNodes(backend, signal, {
+        refresh: body.refresh === true,
+      })
+      const configMs = Math.round(performance.now() - started)
+      const selected = selectProbeNodes(nodes, name, runtime)
+      const node = selected.find((entry) => entry.name === name)
+      if (!node || node.type === 'select') throw new Error('请选择实际节点，不支持对策略组检测')
+      if (kind === 'info') {
+        let addresses = [],
+          dnsError = ''
+        try {
+          addresses = await resolveEntry(node.server)
+        } catch {
+          dnsError = '面板服务器无法解析入口域名'
         }
-        return await withProbe({ binary, tempRoot, nodes, name, runtime, signal }, (proxy) =>
+        return {
+          server: node.server || '',
+          port: node.port || '',
+          protocol: node.type,
+          udp: node.udp ?? null,
+          addresses,
+          dnsError,
+          checkedAt: new Date().toISOString(),
+          timing: { configMs, totalMs: Math.round(performance.now() - started) },
+        }
+      }
+      return enqueueProbe(async () => {
+        const value = await runProbe({ binary, tempRoot, nodes, name, runtime, signal }, (proxy) =>
           testNode(proxy, kind, signal),
         )
+        return { ...value, timing: { configMs, totalMs: Math.round(performance.now() - started) } }
       }, signal)
     }),
   )

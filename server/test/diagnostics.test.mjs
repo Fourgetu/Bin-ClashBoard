@@ -18,6 +18,7 @@ import {
 import {
   DOWNLOAD_BYTES,
   DOWNLOAD_URL,
+  createDiagnosticConfigCache,
   createProbeQueue,
   diagnosticsErrorMessage,
   isPublicAddress,
@@ -255,7 +256,7 @@ test('aborting a queued probe never runs it or overlaps the active probe', async
   assert.equal(lastRuns, 1)
 })
 
-test('concurrent node API queries wait and all return results instead of HTTP 409', async () => {
+test('basic info queries run concurrently without occupying the isolated probe queue', async () => {
   const app = express()
   app.use(express.json())
   let running = 0,
@@ -289,7 +290,7 @@ test('concurrent node API queries wait and all return results instead of HTTP 40
     )
     for (const response of responses) assert.equal((await response.json()).server, '127.0.0.1')
     assert.equal(loads, 3)
-    assert.equal(maxRunning, 1)
+    assert.equal(maxRunning, 3)
   } finally {
     await close(server)
   }
@@ -303,6 +304,95 @@ test('diagnostic errors distinguish a TLS handshake failure from timeout', () =>
     /TLS.*建立前断开/,
   )
   assert.match(diagnosticsErrorMessage(new DOMException('aborted', 'AbortError')), /超时/)
+})
+
+test('config cache shares reads, isolates backends, expires and supports explicit refresh', async () => {
+  let time = 0,
+    loads = 0
+  const read = createDiagnosticConfigCache({ ttlMs: 100, now: () => time })
+  const load = async () => ({ revision: ++loads })
+  const [first, shared] = await Promise.all([read('a', load), read('a', load)])
+  assert.equal(first, shared)
+  assert.equal(loads, 1)
+  assert.equal(await read('a', load), first)
+  assert.notEqual(await read('b', load), first)
+  assert.equal(loads, 2)
+  assert.equal((await read('a', load, undefined, true)).revision, 3)
+  time = 101
+  assert.equal((await read('a', load)).revision, 4)
+})
+
+test('cancelled config waiter does not abort another request or poison the cache', async () => {
+  const read = createDiagnosticConfigCache()
+  const gate = Promise.withResolvers()
+  const controller = new AbortController()
+  let loadSignal,
+    loads = 0
+  const load = async (signal) => {
+    loads++
+    loadSignal = signal
+    return gate.promise
+  }
+  const cancelled = read('a', load, controller.signal)
+  const rejection = assert.rejects(cancelled, { name: 'AbortError' })
+  const second = read('a', load)
+  await Promise.resolve()
+  controller.abort()
+  await rejection
+  assert.equal(loadSignal.aborted, false)
+  gate.resolve({ nodes: ['Node'] })
+  assert.deepEqual(await second, { nodes: ['Node'] })
+  assert.deepEqual(await read('a', load), { nodes: ['Node'] })
+  assert.equal(loads, 1)
+})
+
+test('failed config reads are retriable and never become cached results', async () => {
+  const read = createDiagnosticConfigCache()
+  await assert.rejects(
+    read('a', async () => {
+      throw new Error('SSH failed')
+    }),
+    /SSH failed/,
+  )
+  assert.deepEqual(await read('a', async () => ['Node']), ['Node'])
+})
+
+test('basic info returns while a risk probe is still pending', async () => {
+  const app = express()
+  app.use(express.json())
+  const started = Promise.withResolvers(),
+    gate = Promise.withResolvers()
+  registerDiagnostics(app, {
+    readBackend: () => ({}),
+    loadNodes: async () => ({
+      nodes: [{ name: 'Node', type: 'http', server: '127.0.0.1', port: 9 }],
+    }),
+    runProbe: async () => {
+      started.resolve()
+      return gate.promise
+    },
+  })
+  const server = http.createServer(app)
+  const port = await listen(server)
+  const request = (kind) =>
+    fetch(`http://127.0.0.1:${port}/api/diagnostics/node`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Node', kind }),
+      signal: AbortSignal.timeout(2000),
+    })
+  try {
+    const risk = request('intelligence')
+    await started.promise
+    const info = await request('info')
+    assert.equal(info.status, 200)
+    assert.equal((await info.json()).server, '127.0.0.1')
+    gate.resolve({ ip: '1.1.1.1' })
+    assert.equal((await (await risk).json()).ip, '1.1.1.1')
+  } finally {
+    gate.resolve({})
+    await close(server)
+  }
 })
 
 test('download has one bounded GET target and the API rejects upload and missing actions', async () => {
