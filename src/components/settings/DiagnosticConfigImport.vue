@@ -8,7 +8,8 @@
       <p class="text-base-content/65">
         导入 Clash Mi 等客户端当前使用的 Clash / Mihomo
         YAML，只用于此后端的节点信息、风险和手动下载检测。 电脑 Docker 部署同样适用，无需
-        SSH。配置保存在当前面板的数据目录，订阅更新后需重新导入。
+        SSH。选择一次主配置并点击导入，面板会读取其中的 HTTP / HTTPS
+        订阅。配置保存在当前面板的数据目录，订阅更新后需重新导入。
       </p>
       <p
         v-if="disabled"
@@ -66,13 +67,24 @@
       >
         已选择：{{ fileName }}
       </p>
-      <template v-if="preview">
+      <p
+        v-if="preview"
+        class="text-base-content/65"
+      >
+        检测到 {{ preview.providers.length }} 个订阅，其中
+        {{
+          preview.providers.filter((provider) => provider.needsFile && provider.canDownload).length
+        }}
+        个将在点击导入后读取。仅有本地路径的订阅需要补充节点缓存。
+      </p>
+      <template v-if="missingProviders.length">
         <label
           v-for="provider in missingProviders"
           :key="provider.name"
           class="flex flex-col gap-1"
         >
           <span>订阅「{{ provider.name }}」的节点缓存 YAML</span>
+          <span class="text-warning">{{ provider.reason }}</span>
           <input
             class="file-input file-input-sm w-full"
             type="file"
@@ -88,7 +100,8 @@
           </span>
         </label>
         <p class="text-base-content/55">
-          只核对节点名称是否属于此后端，请确认文件确实来自该客户端。合计最多 6 MB。
+          仅需补充上面未能读取的订阅，也可直接重试导入。请选择各自包含实际节点的缓存文件，不要重复选择主配置。配置和订阅合计最多
+          6 MB。
         </p>
       </template>
       <p
@@ -113,7 +126,13 @@
           :disabled="locked || !ready"
           @click="importConfig"
         >
-          {{ busy === 'import' ? '正在导入…' : '导入到此后端' }}
+          {{
+            busy === 'import'
+              ? '正在读取订阅并导入…'
+              : missingProviders.length
+                ? '重新尝试导入'
+                : '导入到此后端'
+          }}
         </button>
         <button
           v-if="status?.configured"
@@ -142,9 +161,11 @@ type Status = {
   updatedAt?: string
   matchedCount?: number
 }
-type Preview = { providers: { name: string; needsFile: boolean }[] }
+type Preview = { providers: { name: string; needsFile: boolean; canDownload: boolean }[] }
+type ProviderFailure = { name: string; reason: string }
 const status = ref<Status | null>(null)
 const preview = ref<Preview | null>(null)
+const missingProviders = ref<ProviderFailure[]>([])
 const configText = ref('')
 const providerFiles = ref<Record<string, string>>({})
 const providerFileNames = ref<Record<string, string>>({})
@@ -154,20 +175,12 @@ const failed = ref(false)
 const busy = ref('')
 const abort = new AbortController()
 const locked = computed(() => props.disabled || Boolean(busy.value))
-const missingProviders = computed(
-  () => preview.value?.providers.filter((provider) => provider.needsFile) || [],
-)
-const ready = computed(
-  () =>
-    Boolean(preview.value) &&
-    missingProviders.value.every((provider) =>
-      Object.prototype.hasOwnProperty.call(providerFiles.value, provider.name),
-    ),
-)
+const ready = computed(() => Boolean(configText.value.trim()))
 watch(
   configText,
   () => {
     preview.value = null
+    missingProviders.value = []
     providerFiles.value = {}
     providerFileNames.value = {}
     fileName.value = ''
@@ -187,7 +200,10 @@ async function request<T>(action: string, body: Record<string, unknown> = {}): P
   if (!response.headers.get('content-type')?.includes('application/json'))
     throw new Error('请更新面板 Node 后端后使用配置导入')
   const data = await response.json()
-  if (!response.ok) throw new Error(data.message || `操作失败：HTTP ${response.status}`)
+  if (!response.ok) {
+    if (action === 'import') missingProviders.value = data.providers || []
+    throw new Error(data.message || `操作失败：HTTP ${response.status}`)
+  }
   return data
 }
 async function perform(action: string, operation: () => Promise<void>) {

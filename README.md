@@ -4,7 +4,7 @@
 
 Bin-ClashBoard 是一个基于 [AnGe-ClashBoard](https://github.com/liandu2024/AnGe-ClashBoard) 与 [zashboard](https://github.com/Zephyruso/zashboard) 继续演进的 Clash 面板，面向 `Clash API`、`Mihomo`、`OpenClash`、`Nikki` 和 `sing-box` 的运行态管理、观测与排错。
 
-当前版本为 `2.06-3`，由 Bin-ClashBoard 持续维护。
+当前版本为 `2.06-4`，由 Bin-ClashBoard 持续维护。
 
 ## 教学视频
 
@@ -109,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/Fourgetu/Bin-ClashBoard/main/script
 
 ## Docker 安装
 
-电脑上使用 Docker Desktop 连接同机 Clash Mi，参见 [电脑 Docker + 桌面客户端](docs/desktop-docker.zh-CN.md)。节点配置导入从 `v2.06-3` 开始提供，支持选择本机文件或粘贴 YAML，不需要软路由。
+电脑上使用 Docker Desktop 连接同机 Clash Mi，参见 [电脑 Docker + 桌面客户端](docs/desktop-docker.zh-CN.md)。节点配置导入从 `v2.06-3` 开始提供；`v2.06-4` 起选择一次主 YAML 并点击导入即可读取其中的 HTTP / HTTPS 订阅，仅失败项或本地订阅需要补充缓存文件，不需要软路由。
 
 安装前提：
 
