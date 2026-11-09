@@ -1,6 +1,6 @@
 # 电脑 Docker + Clash Mi / Mihomo 桌面客户端
 
-适用于面板和 Clash Mi 在同一台 Windows / macOS 电脑运行的情况。面板运行在 Docker Desktop 的 Linux 容器中，Clash Mi 运行在电脑桌面。无需软路由或 SSH。节点配置导入从 `v2.06-3` 提供；本页的一次主配置导入流程要求 `v2.06-4` 或更新版本。
+适用于面板和 Clash Mi 在同一台 Windows / macOS 电脑运行的情况。面板运行在 Docker Desktop 的 Linux 容器中，Clash Mi 运行在电脑桌面。无需软路由或 SSH。节点配置导入从 `v2.06-3` 提供；一次主配置导入从 `v2.06-4` 提供；本页推荐的只读挂载方式要求 `v2.06-5` 或更新版本。
 
 ## 安装或更新面板
 
@@ -13,7 +13,7 @@ docker compose -f compose.desktop.yaml up -d
 
 访问 `http://localhost:2048`。示例仅发布到本机回环地址，持久化目录为同目录的 `data`。
 
-已有面板请使用原来的 Compose 文件，把镜像更新为 `ghcr.io/fourgetu/bin-clashboard:v2.06-4`（或更新 `latest`），保留原来的 `/app/data` 挂载再执行 `docker compose pull` 和 `docker compose up -d`。不要切换到空的数据目录。
+已有面板请使用原来的 Compose 文件，把镜像更新为 `ghcr.io/fourgetu/bin-clashboard:v2.06-5`（或更新 `latest`），保留原来的 `/app/data` 挂载再执行 `docker compose pull` 和 `docker compose up -d`。不要切换到空的数据目录。
 
 ## 连接电脑里的 Clash Mi
 
@@ -39,9 +39,51 @@ extra_hosts:
 
 这是宿主机地址映射，仍需确保控制器监听容器可达的接口。Docker Desktop 已提供该名称，无需覆盖其默认映射。
 
-## 导入节点配置
+## 推荐：一次挂载 Clash Mi 数据目录
 
-1. 保存并选中 Clash Mi 后端，进入「编辑后端 → 节点检测配置（桌面客户端）」。
+适用于面板 Docker 和 Clash Mi 在同一台电脑运行。把**完整数据目录**只读挂载给面板，之后每次发起节点查询都读取当前主配置和对应订阅缓存，不需要逐个选 YAML，也不需要在更新订阅后重新导入。
+
+1. 找到包含 `service_core_runtime_profile.yaml` 的 Clash Mi 数据目录。Windows 便携版通常是程序目录的 `portable`。挂载原始数据目录，保留全部订阅缓存和目录结构，不是导出到「下载」文件夹的一份主 YAML。
+2. 在**现有** Compose 文件的面板服务下增加只读挂载，保留原 `/app/data`、端口、网络等设置：
+
+```yaml
+services:
+  bin-clashboard:
+    # 原有 image、ports、volumes 等配置保留；镜像更新为 v2.06-5 或 latest
+    volumes:
+      - ./data:/app/data
+      - type: bind
+        source: "C:/实际路径/ClashMi数据目录"
+        target: /app/clashmi
+        read_only: true
+        bind:
+          create_host_path: false
+```
+
+macOS / Linux 把 `source` 换成该电脑上的实际数据目录。仅挂载容器所在电脑的路径；其他电脑上的目录不会通过控制器 API 自动传输。
+
+3. 在原 Compose 目录执行 `docker compose pull` 和 `docker compose up -d`，重建面板容器。此过程面板短暂不可用，持久化数据保留，Clash Mi 数据目录只读。
+4. 进入「设置 → 修改后端配置 → 节点检测配置（桌面客户端）」，点击「连接配置目录」。Clash Mi 的运行配置会自动选中；普通 Mihomo 目录有多个主配置时仅需选择一次。页面显示「已连接配置目录」后即可使用节点卡片。
+
+配置中的 Windows / macOS 绝对路径会按原目录结构匹配到挂载内的缓存，不要求修改客户端 YAML。无法确定唯一文件时会明确报错，不随意选同名文件。目录绑定当前后端，换控制器地址需重新连接；不会把配置自动套用到其他后端。断开目录仅移除面板绑定，不删除客户端文件。
+
+「自动读取」指查询时读取当前文件，不是后台自动测速。悬停只展示已有结果，节点信息和风险仍复用缓存，手动刷新时读取更新后的配置；下载测速仍只手动触发。
+
+### Windows PowerShell 7 辅助配置
+
+下载此版本仓库后，可用脚本生成一个独立 Compose 挂载覆盖文件，无需手工编辑原 Compose。替换两个路径后执行：
+
+```powershell
+pwsh.exe -NoProfile -File .\scripts\enable-clashmi-mount.ps1 -DataDirectory 'C:\实际路径\ClashMi数据目录' -ComposeFile 'C:\原面板目录\compose.yaml' -Apply
+```
+
+脚本验证运行配置存在，生成同目录的 `compose.clashmi.local.yaml`，校验 Compose 后拉取镜像并重建指定面板服务。默认服务名为 `bin-clashboard`；不同服务名追加 `-Service '你的服务名'`。已有不同内容的覆盖文件不会被覆盖。原 Compose 中的镜像应先更新为 `v2.06-5` 或 `latest`。
+
+以后执行 Compose 更新时，同时带上原文件和 `compose.clashmi.local.yaml`，以保留挂载。也可使用仓库提供的 `compose.clashmi.yaml` 覆盖文件，但需自行设置 `CLASHMI_DATA_DIR`。已有容器若是 `docker run` 创建，需按原参数重建并额外添加 `--mount "type=bind,source=实际数据目录,target=/app/clashmi,readonly"`，保留原数据挂载。
+
+## 备用：手动导入节点配置
+
+1. 保存并选中 Clash Mi 后端，进入「编辑后端 → 节点检测配置（桌面客户端）→ 手动导入 YAML（备用）」。
 2. 从浏览器选择这台电脑上的 Clash / Mihomo YAML 文件，或粘贴配置。文件由浏览器上传到当前面板容器，不需要把宿主机配置目录挂进容器。
 3. 直接点击「导入到此后端」。面板会并行读取主配置中 `type: http` 的 HTTP / HTTPS 订阅，支持订阅请求头和常见重定向。无需为每个订阅选文件；「检查配置」仅作预览，不会请求订阅。
 4. 若订阅读取失败或仅有本地路径，页面只列出这些订阅，可重试或补选各自包含 `proxies` 的节点缓存 YAML（不要重复选择主配置）。全部校验通过后才保存，失败保留原配置。成功后回到节点卡片，在「节点信息」或「风险评估」标签查询。悬停只展示，点击延迟数字只测延迟；下载测速仍需手动触发，不测上传。

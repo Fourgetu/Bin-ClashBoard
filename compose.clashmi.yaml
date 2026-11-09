@@ -1,0 +1,11 @@
+# Optional override for compose.desktop.yaml (or an existing compatible service).
+# Set CLASHMI_DATA_DIR to the complete Clash Mi data directory on the Docker host.
+services:
+  bin-clashboard:
+    volumes:
+      - type: bind
+        source: ${CLASHMI_DATA_DIR:?请设置 Clash Mi 数据目录 CLASHMI_DATA_DIR}
+        target: /app/clashmi
+        read_only: true
+        bind:
+          create_host_path: false

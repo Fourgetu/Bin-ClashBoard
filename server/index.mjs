@@ -1,6 +1,7 @@
 ﻿import express from 'express'
 import { execFile } from 'node:child_process'
 import { createDiagnosticImportStore, registerDiagnosticImports } from './diagnostic-config.mjs'
+import { createMountedDiagnosticSource } from './diagnostic-mounted.mjs'
 import { createDiagnosticConfigCache, loadDiagnosticNodeDependencies, openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
@@ -4738,6 +4739,7 @@ app.use((req, res, next) => {
 
 const readDiagnosticNodesCached = createDiagnosticConfigCache()
 const diagnosticImports = createDiagnosticImportStore(db)
+const mountedDiagnosticSource = createMountedDiagnosticSource(process.env.ZASHBOARD_DIAGNOSTICS_DIR || '/app/clashmi')
 const readDiagnosticBackend = (uuid) => {
   const backends = parseStoredJson(getStorageValueStatement.get(SETUP_API_LIST_KEY)?.value, [])
   const backend = Array.isArray(backends) && backends.find((entry) => entry.uuid === uuid)
@@ -4746,6 +4748,7 @@ const readDiagnosticBackend = (uuid) => {
 }
 registerDiagnosticImports(app, {
   store: diagnosticImports,
+  mountedSource: mountedDiagnosticSource,
   readBackend: readDiagnosticBackend,
   readLiveNames: async (backend) => {
     const signal = AbortSignal.timeout(10000)
@@ -4769,6 +4772,7 @@ registerDiagnostics(app, {
     return parseDhcpLeases(await readRemoteFile(client, '/tmp/dhcp.leases'))
   }),
   loadNodes: async (backend, signal, { refresh = false, name } = {}) => {
+    const mounted = diagnosticImports.readMount(backend, mountedDiagnosticSource.root)
     const importedNodes = diagnosticImports.read(backend)
     const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
     const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
@@ -4785,6 +4789,14 @@ registerDiagnostics(app, {
       }
     }
     const selectorState = Object.entries(runtime).filter(([,node]) => node.now).map(([name,node]) => [name,node.now])
+    if (mounted) {
+      if (name && !Object.hasOwn(runtime, name) && !providerOwners.has(name))
+        throw new Error('当前后端已没有该节点，请刷新节点列表')
+      // Read current files for every requested diagnostic. UI result caching still
+      // prevents hover/click from repeatedly probing; subscriptions need no reimport.
+      const nodes = await mountedDiagnosticSource.read({ ...mounted, name, providerOwners, runtime, signal })
+      return { nodes, runtime }
+    }
     if (importedNodes) {
       if (name && !Object.hasOwn(runtime, name) && !providerOwners.has(name))
         throw new Error('当前后端已没有该节点，请刷新节点列表并重新导入对应配置')
