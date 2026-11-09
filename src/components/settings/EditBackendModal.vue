@@ -69,6 +69,7 @@
           </div>
         </div>
 
+        <DesktopDockerHelp />
         <DiagnosticConfigImport
           v-if="selectedBackend"
           :key="selectedBackend.uuid"
@@ -172,6 +173,7 @@ import { activeBackend, backendList, updateBackend } from '@/store/setup'
 import type { Backend } from '@/types'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import DesktopDockerHelp from './DesktopDockerHelp.vue'
 import DiagnosticConfigImport from './DiagnosticConfigImport.vue'
 
 interface Props {

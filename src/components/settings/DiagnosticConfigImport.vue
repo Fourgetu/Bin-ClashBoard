@@ -7,8 +7,8 @@
     <div class="mt-3 flex flex-col gap-3 text-xs">
       <p class="text-base-content/65">
         导入 Clash Mi 等客户端当前使用的 Clash / Mihomo
-        YAML，只用于此后端的节点信息、风险和手动下载检测。
-        配置保存在面板服务器，不修改客户端。订阅更新后需重新导入。
+        YAML，只用于此后端的节点信息、风险和手动下载检测。 电脑 Docker 部署同样适用，无需
+        SSH。配置保存在当前面板的数据目录，订阅更新后需重新导入。
       </p>
       <p
         v-if="disabled"
@@ -36,7 +36,7 @@
         v-else-if="status"
         class="text-base-content/55"
       >
-        尚未导入，软路由仍使用原有 SSH / 服务端配置。
+        尚未导入。选择该客户端的配置文件即可；已配置的 SSH / 服务端来源仍可使用。
       </p>
       <label class="flex flex-col gap-1">
         <span>配置或订阅 YAML 文件</span>

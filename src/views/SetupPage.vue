@@ -89,6 +89,7 @@
         </div>
       </div>
 
+      <DesktopDockerHelp />
       <div class="border-base-content/10 flex flex-col gap-3 border-t pt-3">
         <div class="text-sm font-medium">{{ $t('ruleSourceSsh') }}</div>
         <div class="grid gap-3 sm:grid-cols-2">
@@ -223,6 +224,7 @@
 <script setup lang="ts">
 import ImportSettings from '@/components/common/ImportSettings.vue'
 import TextInput from '@/components/common/TextInput.vue'
+import DesktopDockerHelp from '@/components/settings/DesktopDockerHelp.vue'
 import EditBackendModal from '@/components/settings/EditBackendModal.vue'
 import LanguageSelect from '@/components/settings/LanguageSelect.vue'
 import { ROUTE_NAME } from '@/constant'
