@@ -12,16 +12,17 @@
       aria-haspopup="dialog"
       aria-controls="node-diagnostics-popover"
       :aria-expanded="diagnosticsAnchor === anchor && Boolean(nodeDiagnostics)"
+      title="悬停查看详情，点击重新检测延迟"
       @mouseenter="open"
       @mouseleave="scheduleNodeDiagnosticsClose"
       @focus="open"
       @blur="scheduleNodeDiagnosticsClose"
-      @click.stop="open"
+      @click.stop="refreshLatency"
       @keydown.down.prevent="focusPanel"
       @keydown.esc.stop.prevent="closeNodeDiagnostics"
     >
       <span
-        v-if="loading"
+        v-if="loading || testingLatency"
         class="loading loading-dots loading-xs"
       />
       <span v-else-if="latency > 0">{{ latency }}</span>
@@ -52,8 +53,10 @@
 <script setup lang="ts">
 import { getColorForLatency } from '@/helper'
 import {
+  checkNode,
   closeNodeDiagnostics,
   diagnosticsAnchor,
+  isNodeLatencyPending,
   nodeDiagnostics,
   nodeResultKey,
   nodeResults,
@@ -68,8 +71,13 @@ const props = defineProps<{ name: string; groupName?: string; loading?: boolean 
 const anchor = ref<HTMLButtonElement>()
 const latency = computed(() => getLatencyByName(props.name, props.groupName))
 const download = computed(() => nodeResults[nodeResultKey(props.name)]?.download)
+const testingLatency = computed(() => isNodeLatencyPending(props.name))
 function open() {
   if (anchor.value) openNodeDiagnostics(props.name, props.groupName, anchor.value)
+}
+function refreshLatency() {
+  open()
+  void checkNode(props.name, props.groupName, 'latency', true)
 }
 async function focusPanel() {
   open()

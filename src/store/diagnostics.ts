@@ -52,6 +52,8 @@ export const diagnosticsAnchor = shallowRef<HTMLElement | null>(null)
 type CheckKind = 'latency' | 'info' | 'intelligence' | 'download'
 type CheckState = { pending: boolean; error: string }
 const checks = reactive<Record<string, Partial<Record<CheckKind, CheckState>>>>({})
+export const isNodeLatencyPending = (name: string) =>
+  checks[nodeResultKey(name)]?.latency?.pending === true
 export const currentNodeChecks = computed(
   () => checks[nodeResultKey(nodeDiagnostics.value?.name || '')] || {},
 )
@@ -116,7 +118,9 @@ export function checkNode(
   const controller = new AbortController()
   controllers.set(requestKey, controller)
   const testUrl = getTestUrl(groupName)
-  const task = queue.then(async () => {
+  // Core latency requests do not use the isolated probe, so a click can run
+  // immediately while metadata queries wait in their own queue.
+  const task = (kind === 'latency' ? Promise.resolve() : queue).then(async () => {
     try {
       if (backendUuid !== activeUuid.value) {
         delete checks[key][kind]
@@ -145,7 +149,7 @@ export function checkNode(
     }
   })
   pending.set(requestKey, task)
-  queue = task
+  if (kind !== 'latency') queue = task
   return task
 }
 export function cancelNodeDownload() {
