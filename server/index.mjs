@@ -1,4 +1,4 @@
-﻿import express from 'express'
+import express from 'express'
 import { execFile } from 'node:child_process'
 import { createDiagnosticImportStore, registerDiagnosticImports } from './diagnostic-config.mjs'
 import { createMountedDiagnosticSource } from './diagnostic-mounted.mjs'
@@ -218,6 +218,12 @@ const upsertRuleProviderCacheStatement = db.prepare(`
 
 const getCachedRuleProviderStatement = db.prepare(`
   SELECT name, behavior, format, kind, source_url, interval_seconds, body, updated_at
+  FROM rule_provider_cache
+  ORDER BY name
+`)
+// 只取元数据（不含 body）：整表连 body 一起读会瞬时分配几十 MB
+const getCachedRuleProviderMetaStatement = db.prepare(`
+  SELECT name, behavior, format, kind, source_url, interval_seconds, updated_at
   FROM rule_provider_cache
   ORDER BY name
 `)
@@ -1183,7 +1189,7 @@ function getManagedRuleSourceCandidateMap() {
     extractRuleProviderEntries(defaultRuleSourceConfigPath).forEach(pushCandidate)
   }
 
-  getCachedRuleProviderStatement.all().forEach(pushCandidate)
+  getCachedRuleProviderMetaStatement.all().forEach(pushCandidate)
 
   if (fs.existsSync(bundledRuleSourceConfigPath)) {
     extractRuleProviderEntries(bundledRuleSourceConfigPath).forEach(pushCandidate)
@@ -3891,6 +3897,7 @@ const saveProviderToCache = (provider, body) => {
     provider.interval,
     body,
   )
+  invalidateRuleProviderCounts()
 }
 
 const getRuleProviderCacheRuleCount = () => {
@@ -3899,13 +3906,27 @@ const getRuleProviderCacheRuleCount = () => {
   return Number(row?.total || 0)
 }
 
+// 统计每个规则集条数需要把整份 body 读出来逐行切分，几十万条规则会瞬时吃掉几十 MB 内存。
+// 计数只在缓存写入时才会变化，因此这里做缓存，避免每 60 秒的自动刷新检查反复全量计算。
+let ruleProviderCountsCache = null
+let ruleProviderCountsVersion = 0
+
+const invalidateRuleProviderCounts = () => {
+  ruleProviderCountsCache = null
+  ruleProviderCountsVersion += 1
+}
+
 const getRuleProviderCacheProviderCounts = () => {
-  return Object.fromEntries(
+  if (ruleProviderCountsCache && ruleProviderCountsCache.version === ruleProviderCountsVersion)
+    return ruleProviderCountsCache.value
+  const value = Object.fromEntries(
     getCachedRuleProviderStatement.all().map((provider) => [
       provider.name,
       countRulesInBody(provider.body),
     ]),
   )
+  ruleProviderCountsCache = { version: ruleProviderCountsVersion, value }
+  return value
 }
 
 const buildRuleProviderSourceMetadata = (providers, extra = {}) => ({
@@ -3968,7 +3989,7 @@ const getCachedRuleProviderSourceMetadata = () => {
     return storedMetadata
   }
 
-  const cachedProviders = getCachedRuleProviderStatement.all()
+  const cachedProviders = getCachedRuleProviderMetaStatement.all()
 
   return normalizeRuleProviderSourceMetadata({
     providerUrls: Object.fromEntries(
@@ -4011,6 +4032,7 @@ const replaceRuleProviderCache = (items, options = {}) => {
   try {
     if (force) {
       clearRuleProviderCacheStatement.run()
+      invalidateRuleProviderCounts()
     }
 
     for (const item of items) {
@@ -4135,7 +4157,7 @@ const updateRuleProviderCache = async (options = {}) => {
     const unresolvedProviderNames =
       providerNames?.filter((providerName) => !configuredProviderNameSet.has(providerName)) || []
     const cachedProviderMap = new Map(
-      getCachedRuleProviderStatement.all().map((provider) => [provider.name, provider]),
+      getCachedRuleProviderMetaStatement.all().map((provider) => [provider.name, provider]),
     )
     const errors = unresolvedProviderNames.map((providerName) => ({
       name: providerName,
@@ -4741,7 +4763,8 @@ const readDiagnosticNodesCached = createDiagnosticConfigCache()
 
 /**
  * /providers/proxies 会返回上千个节点，逐次拉取会把「节点信息」拖到 1 秒以上。
- * 这里对控制器快照做 8 秒缓存，同一批检测共用一次拉取。
+ * 这里只缓存真正要用的紧凑结构（运行时选择器状态 + 节点归属表），
+ * 不保留原始 JSON，避免几千个节点对象长期驻留内存。
  */
 const controllerSnapshotCache = new Map()
 const readControllerSnapshot = async (backend, signal, refresh = false) => {
@@ -4753,9 +4776,17 @@ const readControllerSnapshot = async (backend, signal, refresh = false) => {
       .then((response) => response.json())
       .catch(() => ({})),
   ])
-  const value = { runtimeData, providerData }
+  const runtime = runtimeData.proxies || {}
+  const providerOwners = new Map()
+  for (const [providerName, provider] of Object.entries(providerData.providers || {})) {
+    for (const node of provider.proxies || []) {
+      if (!providerOwners.has(node.name)) providerOwners.set(node.name, [])
+      providerOwners.get(node.name).push(providerName)
+    }
+  }
+  const value = { runtime, providerOwners }
   controllerSnapshotCache.set(backend.uuid, { value, expires: Date.now() + 60_000 })
-  if (controllerSnapshotCache.size > 4)
+  if (controllerSnapshotCache.size > 2)
     controllerSnapshotCache.delete(controllerSnapshotCache.keys().next().value)
   return value
 }
@@ -4797,15 +4828,7 @@ registerDiagnostics(app, {
     const importedNodes = diagnosticImports.read(backend)
     const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
     const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
-    const { runtimeData, providerData } = await readControllerSnapshot(backend, signal, refresh)
-    const runtime = runtimeData.proxies || {}
-    const providerOwners = new Map()
-    for (const [providerName, provider] of Object.entries(providerData.providers || {})) {
-      for (const node of provider.proxies || []) {
-        if (!providerOwners.has(node.name)) providerOwners.set(node.name, [])
-        providerOwners.get(node.name).push(providerName)
-      }
-    }
+    const { runtime, providerOwners } = await readControllerSnapshot(backend, signal, refresh)
     if (mounted) {
       if (name && !Object.hasOwn(runtime, name) && !providerOwners.has(name))
         throw new Error('当前后端已没有该节点，请刷新节点列表')
