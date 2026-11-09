@@ -9,7 +9,9 @@
         class="relative flex-1 overflow-hidden"
         ref="swiperRef"
       >
-        <div :class="['absolute flex h-full w-full flex-col overflow-y-auto', SCROLLABLE_PARENT_CLASS]">
+        <div
+          :class="['absolute flex h-full w-full flex-col overflow-y-auto', SCROLLABLE_PARENT_CLASS]"
+        >
           <Transition
             :name="(route.meta.transition as string) || 'fade'"
             v-if="isMiddleScreen"
@@ -52,6 +54,7 @@
       </div>
     </RouterView>
 
+    <NodeDiagnosticsPopover />
     <DialogWrapper v-model="autoSwitchBackendDialog">
       <div class="mb-2">
         {{ $t('currentBackendUnavailable') }}
@@ -77,6 +80,7 @@
 <script setup lang="ts">
 import { isBackendAvailable } from '@/api'
 import DialogWrapper from '@/components/common/DialogWrapper.vue'
+import NodeDiagnosticsPopover from '@/components/proxies/NodeDiagnosticsPopover.vue'
 import SideBar from '@/components/sidebar/SideBar.vue'
 import { dockTop } from '@/composables/paddingViews'
 import { useSettings } from '@/composables/settings'

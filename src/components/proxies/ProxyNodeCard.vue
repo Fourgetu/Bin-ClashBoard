@@ -39,12 +39,11 @@
       >
         {{ typeDescription }}
       </span>
-      <LatencyTag
-        :class="[isSmallCard && 'h-4! w-8! rounded-md!', 'shrink-0', active && 'hover:bg-base-300']"
+      <NodeDiagnosticsBadge
         :name="node.name"
-        :loading="isLatencyTesting"
         :group-name="groupName"
-        @click.stop="handlerLatencyTest"
+        :loading="isLatencyTesting"
+        :class="isSmallCard && 'h-4!'"
       />
     </div>
   </div>
@@ -60,7 +59,7 @@ import { smartWeightsMap } from '@/store/smart'
 import { twMerge } from 'tailwind-merge'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import LatencyTag from './LatencyTag.vue'
+import NodeDiagnosticsBadge from './NodeDiagnosticsBadge.vue'
 import ProxyIcon from './ProxyIcon.vue'
 
 const DARK_HOVER_THEMES = new Set([
