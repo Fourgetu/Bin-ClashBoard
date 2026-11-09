@@ -1,4 +1,5 @@
 import { fetchServerApi } from '@/store/auth'
+import { getTestUrl, proxyLatencyTest } from '@/store/proxies'
 import { activeUuid } from '@/store/setup'
 import { computed, reactive, ref, shallowRef, watch } from 'vue'
 
@@ -48,7 +49,18 @@ export type Intelligence = {
 type NodeResults = { info?: NodeInfo; intelligence?: Intelligence; download?: DownloadResult }
 export const nodeDiagnostics = ref<{ name: string; groupName?: string } | null>(null)
 export const diagnosticsAnchor = shallowRef<HTMLElement | null>(null)
-export const diagnosticsBusy = ref(false)
+type CheckKind = 'latency' | 'info' | 'intelligence' | 'download'
+type CheckState = { pending: boolean; error: string }
+const checks = reactive<Record<string, Partial<Record<CheckKind, CheckState>>>>({})
+export const currentNodeChecks = computed(
+  () => checks[nodeResultKey(nodeDiagnostics.value?.name || '')] || {},
+)
+export const diagnosticsBusy = computed(() =>
+  Object.values(currentNodeChecks.value).some((check) => check.pending),
+)
+const pending = new Map<string, Promise<void>>()
+const controllers = new Map<string, AbortController>()
+let queue = Promise.resolve()
 let closeTimer: ReturnType<typeof setTimeout> | undefined
 export function keepNodeDiagnosticsOpen() {
   clearTimeout(closeTimer)
@@ -84,8 +96,61 @@ export function saveNodeResult(
   value: NodeInfo | Intelligence | DownloadResult,
 ) {
   nodeResults[key] = { ...nodeResults[key], [kind]: value }
-  const keys = Object.keys(nodeResults)
-  if (keys.length > 200) delete nodeResults[keys[0]]
+}
+// One attempt per node/backend per page session, including failures. Only explicit
+// refresh retries. Serial requests also respect the backend's isolated-probe lock.
+export function checkNode(
+  name: string,
+  groupName: string | undefined,
+  kind: CheckKind,
+  force = false,
+) {
+  const backendUuid = activeUuid.value
+  const key = nodeResultKey(name)
+  const requestKey = JSON.stringify([key, kind])
+  if (pending.has(requestKey)) return pending.get(requestKey)!
+  if (!force && checks[key]?.[kind]) return Promise.resolve()
+  checks[key] ||= {}
+  checks[key][kind] = { pending: true, error: '' }
+  const state = checks[key][kind]!
+  const controller = new AbortController()
+  controllers.set(requestKey, controller)
+  const testUrl = getTestUrl(groupName)
+  const task = queue.then(async () => {
+    try {
+      if (backendUuid !== activeUuid.value) {
+        delete checks[key][kind]
+        return
+      }
+      controller.signal.throwIfAborted()
+      if (kind === 'latency') await proxyLatencyTest(name, testUrl)
+      else {
+        const value = await diagnosticsRequest<NodeInfo | Intelligence | DownloadResult>(
+          'node',
+          { name, kind, backendUuid },
+          controller.signal,
+        )
+        saveNodeResult(key, kind, value)
+      }
+    } catch (cause) {
+      state.error = controller.signal.aborted
+        ? '已停止测速'
+        : cause instanceof Error
+          ? cause.message
+          : '检测失败'
+    } finally {
+      state.pending = false
+      pending.delete(requestKey)
+      controllers.delete(requestKey)
+    }
+  })
+  pending.set(requestKey, task)
+  queue = task
+  return task
+}
+export function cancelNodeDownload() {
+  if (!nodeDiagnostics.value) return
+  controllers.get(JSON.stringify([nodeResultKey(nodeDiagnostics.value.name), 'download']))?.abort()
 }
 export function openNodeDiagnostics(
   name: string,
@@ -93,10 +158,12 @@ export function openNodeDiagnostics(
   anchor: HTMLElement,
 ) {
   keepNodeDiagnosticsOpen()
-  if (diagnosticsBusy.value) return
   diagnosticsAnchor.value = anchor
   if (nodeDiagnostics.value?.name === name && nodeDiagnostics.value.groupName === groupName) return
   nodeDiagnostics.value = { name, groupName }
+  for (const kind of ['latency', 'info', 'intelligence'] as const) {
+    void checkNode(name, groupName, kind)
+  }
 }
 watch(activeUuid, closeNodeDiagnostics)
 
@@ -108,7 +175,7 @@ export async function diagnosticsRequest<T>(
   const response = await fetchServerApi(`/api/diagnostics/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...body, backendUuid: activeUuid.value }),
+    body: JSON.stringify({ backendUuid: activeUuid.value, ...body }),
     signal,
   })
   if (!response.headers.get('content-type')?.includes('application/json'))

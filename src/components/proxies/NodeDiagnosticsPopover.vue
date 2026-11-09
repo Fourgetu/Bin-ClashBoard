@@ -25,7 +25,7 @@
           v-if="tab !== 'download'"
           type="button"
           class="hover:bg-base-200 flex size-5 items-center justify-center rounded-full"
-          :aria-disabled="busy"
+          :disabled="busy"
           :aria-label="tab === 'latency' ? '重新检测延迟' : '刷新查询'"
           :title="tab === 'latency' ? '重新检测延迟' : '刷新查询'"
           @click="refreshTab"
@@ -123,7 +123,8 @@
             class="btn btn-sm h-7 min-h-7 text-[11px]"
             :class="!busy && 'btn-primary'"
             title="仅下载，最多 10 MB，最长 30 秒"
-            @click="busy ? cancel() : run('download')"
+            :disabled="busy && runningKind !== 'download'"
+            @click="runningKind === 'download' ? cancelNodeDownload() : run('download')"
           >
             <span
               v-if="busy"
@@ -133,7 +134,9 @@
               v-else
               class="size-3.5"
             />
-            {{ busy ? '停止测速' : '开始下载测速 · 10 MB' }}
+            {{
+              runningKind === 'download' ? '停止测速' : busy ? '查询中…' : '开始下载测速 · 10 MB'
+            }}
           </button>
         </div>
 
@@ -209,29 +212,41 @@
           v-else
           class="flex flex-col gap-2 py-1"
         >
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-base-content/45">出口 IP</span
-            ><span>{{ results.intelligence?.ip || '—' }}</span>
-          </div>
-          <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 leading-4">
+          <div class="font-semibold">IP 情报</div>
+          <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 leading-4">
             <dt class="text-base-content/45">风险标记</dt>
-            <dd class="text-right break-words">
-              {{
-                results.intelligence?.threats
-                  ? results.intelligence.threats.length
-                    ? results.intelligence.threats.join('、')
-                    : '未发现已知威胁'
-                  : '—'
-              }}
+            <dd
+              class="text-right break-words"
+              :class="threatClass"
+            >
+              {{ threatLabel }}
             </dd>
             <dt class="text-base-content/45">滥用等级</dt>
-            <dd class="text-right">{{ abuseLabel }}</dd>
-            <dt class="text-base-content/45">HTTP 蜜罐</dt>
-            <dd class="text-right">
-              {{ results.intelligence?.httpThreat == null ? '—' : results.intelligence.httpThreat }}
+            <dd
+              class="text-right"
+              :class="abuseClass"
+              :title="results.intelligence?.abuseScore"
+            >
+              {{ abuseLabel }}
             </dd>
-            <dt class="text-base-content/45">RPKI</dt>
-            <dd class="text-right">{{ rpkiLabel }}</dd>
+            <dt class="text-base-content/45">HTTP 蜜罐黑名单</dt>
+            <dd
+              class="text-right"
+              :class="results.intelligence?.httpThreat ? 'text-error' : 'text-base-content/45'"
+            >
+              {{ httpThreatLabel }}
+            </dd>
+            <dt class="text-base-content/45">RPKI 状态</dt>
+            <dd
+              class="text-right"
+              :class="rpkiClass"
+            >
+              {{ rpkiLabel }}
+            </dd>
+          </dl>
+          <dl
+            class="border-base-content/10 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 border-t pt-2 leading-4"
+          >
             <template
               v-for="flag in riskFlags"
               :key="flag.key"
@@ -241,45 +256,62 @@
                 class="text-right"
                 :class="
                   flagValue(flag.key) === true
-                    ? 'text-warning'
+                    ? 'text-error'
                     : flagValue(flag.key) === false
                       ? 'text-success'
-                      : 'text-base-content/40'
+                      : 'text-base-content/45'
                 "
               >
-                {{ flagValue(flag.key) === null ? '—' : flagValue(flag.key) ? '已标记' : '未标记' }}
+                {{
+                  flagValue(flag.key) === null
+                    ? '暂无数据'
+                    : flagValue(flag.key)
+                      ? '已检测到'
+                      : '未检测到'
+                }}
               </dd>
             </template>
           </dl>
           <div
-            v-if="results.intelligence?.humanTraffic"
-            class="mt-1"
-            :title="
-              'ASN 统计 · ' +
-              results.intelligence.humanTraffic.range +
-              (results.intelligence.humanTraffic.stale ? ' · 过期缓存' : '')
-            "
+            class="flex items-center gap-1.5 text-[10px] whitespace-nowrap"
+            :title="trafficTitle"
           >
-            <div class="text-base-content/45 mb-1.5 flex justify-between text-[10px]">
-              <span>ASN 人类 {{ results.intelligence.humanTraffic.human }}%</span
-              ><span>机器 {{ results.intelligence.humanTraffic.bot }}%</span>
-            </div>
-            <div class="bg-warning/50 flex h-1 overflow-hidden rounded-full">
-              <div
-                class="bg-success/70"
-                :style="{ width: results.intelligence.humanTraffic.human + '%' }"
-              />
-            </div>
+            <span class="text-base-content/45">人机流量（估算）</span>
+            <template v-if="results.intelligence?.humanTraffic">
+              <span class="text-success"
+                >人类 {{ trafficPercent(results.intelligence.humanTraffic.human) }}%</span
+              >
+              <div class="flex h-1.5 min-w-4 flex-1 overflow-hidden rounded-sm bg-[#ff8e98]">
+                <div
+                  class="bg-[#95b880]"
+                  :style="{ width: results.intelligence.humanTraffic.human + '%' }"
+                />
+              </div>
+              <span class="text-error"
+                >机器 {{ trafficPercent(results.intelligence.humanTraffic.bot) }}%</span
+              >
+            </template>
+            <span
+              v-else
+              class="text-base-content/45 ml-auto"
+              >暂无数据</span
+            >
           </div>
-          <a
-            v-if="results.intelligence"
-            :href="results.intelligence.reportUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-base-content/40 self-end text-[10px] hover:underline"
-            :title="formatTime(results.intelligence.checkedAt) + ' 查询'"
-            >Net.Coffee ↗</a
-          >
+          <div class="text-base-content/45 flex items-center justify-between gap-2 text-[10px]">
+            <span :title="results.intelligence ? formatTime(results.intelligence.checkedAt) : ''">{{
+              results.intelligence
+                ? formatTime(results.intelligence.checkedAt).slice(5, 16) + ' 查询'
+                : '尚未查询'
+            }}</span>
+            <a
+              v-if="results.intelligence"
+              :href="results.intelligence.reportUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="hover:underline"
+              >Net.Coffee 完整报告 ↗</a
+            >
+          </div>
         </div>
       </div>
       <div
@@ -306,20 +338,17 @@
 <script setup lang="ts">
 import {
   diagnosticsBusy as busy,
+  cancelNodeDownload,
+  checkNode,
   closeNodeDiagnostics,
+  currentNodeChecks,
   diagnosticsAnchor,
-  diagnosticsRequest,
   keepNodeDiagnosticsOpen,
-  nodeResultKey,
   currentNodeResults as results,
-  saveNodeResult,
   scheduleNodeDiagnosticsClose,
   nodeDiagnostics as selection,
-  type DownloadResult,
-  type Intelligence,
-  type NodeInfo,
 } from '@/store/diagnostics'
-import { getHistoryByName, getTestUrl, proxyLatencyTest, proxyMap } from '@/store/proxies'
+import { getHistoryByName, proxyMap } from '@/store/proxies'
 import { ArrowDownTrayIcon, ArrowPathIcon, BoltIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
@@ -330,10 +359,22 @@ const tabs = [
   { key: 'risk', label: '风险评估' },
 ] as const
 const tab = ref<(typeof tabs)[number]['key']>('latency')
-const runningKind = ref<'download' | 'metadata' | 'latency' | null>(null)
-const error = ref('')
-let controller: AbortController | undefined
-let generation = 0
+const runningKind = computed(() =>
+  currentNodeChecks.value.download?.pending ? 'download' : 'metadata',
+)
+const error = computed(() => {
+  const kinds =
+    tab.value === 'latency'
+      ? (['latency'] as const)
+      : tab.value === 'download'
+        ? (['download'] as const)
+        : tab.value === 'info'
+          ? (['info', 'intelligence'] as const)
+          : (['intelligence'] as const)
+  return [
+    ...new Set(kinds.map((kind) => currentNodeChecks.value[kind]?.error).filter(Boolean)),
+  ].join('；')
+})
 const panel = ref<HTMLElement>()
 const position = ref({
   left: '12px',
@@ -425,109 +466,84 @@ const riskFlags = [
   { key: 'is_crawler', label: '爬虫 / 机器人' },
 ]
 const flagValue = (key: string) => results.value.intelligence?.flags[key] ?? null
+const threatLabel = computed(() => {
+  const threats = results.value.intelligence?.threats
+  return threats ? (threats.length ? threats.join('、') : '未发现明显威胁') : '暂无数据'
+})
+const threatClass = computed(() => {
+  const threats = results.value.intelligence?.threats
+  return threats ? (threats.length ? 'text-error' : 'text-success') : 'text-base-content/45'
+})
 const abuseLabel = computed(() => {
-  const info = results.value.intelligence
-  if (!info) return '—'
-  const levels: Record<string, string> = {
-    low: '低',
-    elevated: '中',
-    high: '高',
-    very_high: '极高',
-  }
+  const level = results.value.intelligence?.abuseLevel || ''
   return (
-    [levels[info.abuseLevel] || info.abuseLevel, info.abuseScore].filter(Boolean).join(' · ') || '—'
+    (
+      { low: '极度纯净', elevated: '轻度风险', high: '高风险', very_high: '极高风险' } as Record<
+        string,
+        string
+      >
+    )[level] ||
+    level ||
+    '暂无数据'
   )
+})
+const abuseClass = computed(() => {
+  const level = results.value.intelligence?.abuseLevel
+  return level === 'low'
+    ? 'text-success'
+    : level === 'elevated'
+      ? 'text-warning'
+      : level === 'high' || level === 'very_high'
+        ? 'text-error'
+        : 'text-base-content/45'
+})
+const httpThreatLabel = computed(() => {
+  const value = results.value.intelligence?.httpThreat
+  return value == null ? '暂无数据' : value === 0 ? '未发现记录' : `已收录 · ${value}`
 })
 const rpkiLabel = computed(
   () =>
-    ({ valid: 'Valid · 已授权', invalid: 'Invalid · 无效', notfound: 'NotFound · 未声明' })[
+    ({ valid: '已授权', invalid: '无效', notfound: '未声明' })[
       results.value.intelligence?.rpki || ''
-    ] || '—',
+    ] || '待核实',
 )
-const cancel = () => {
-  generation++
-  controller?.abort()
-  busy.value = false
-  runningKind.value = null
-}
+const rpkiClass = computed(() =>
+  results.value.intelligence?.rpki === 'valid'
+    ? 'text-success'
+    : results.value.intelligence?.rpki === 'invalid'
+      ? 'text-error'
+      : 'text-base-content/45',
+)
+const trafficPercent = (value: number) => Number(value.toFixed(2))
+const trafficTitle = computed(() => {
+  const traffic = results.value.intelligence?.humanTraffic
+  return traffic
+    ? `ASN 级别流量估算 · ${traffic.range}${traffic.stale ? ' · 过期缓存' : ''}`
+    : '暂无 ASN 流量统计'
+})
 function selectTab(value: typeof tab.value) {
-  if (tab.value === value || (busy.value && runningKind.value === 'download')) return
-  cancel()
-  error.value = ''
+  if (busy.value && runningKind.value === 'download') return
   tab.value = value
 }
 watch(
   selection,
   () => {
-    cancel()
-    error.value = ''
     tab.value = 'latency'
   },
   { flush: 'sync' },
 )
-onUnmounted(cancel)
-// Tab entry may query latency and metadata, but never starts a download.
-watch(
-  [selection, tab],
-  () => {
-    if (selection.value && tab.value !== 'download') void refreshTab()
-  },
-  { flush: 'post' },
-)
 async function refreshTab() {
-  if (tab.value === 'latency') await testLatency()
-  else if (tab.value === 'info') await run('details')
-  else if (tab.value === 'risk') await run('intelligence')
-}
-async function run(kind: 'info' | 'intelligence' | 'download' | 'details') {
   if (busy.value || !selection.value) return
-  const name = selection.value.name
-  const key = nodeResultKey(name)
-  const request = ++generation
-  controller = new AbortController()
-  busy.value = true
-  runningKind.value = kind === 'download' ? 'download' : 'metadata'
-  error.value = ''
-  const failures: string[] = []
-  try {
-    const kinds = kind === 'details' ? (['info', 'intelligence'] as const) : [kind]
-    for (const action of kinds) {
-      if (request !== generation) break
-      try {
-        const value = await diagnosticsRequest<NodeInfo | Intelligence | DownloadResult>(
-          'node',
-          { name, kind: action },
-          controller.signal,
-        )
-        if (request === generation) saveNodeResult(key, action, value)
-      } catch (cause) {
-        failures.push(cause instanceof Error ? cause.message : '检测失败')
-      }
-    }
-    if (request === generation) error.value = [...new Set(failures)].join('；')
-  } finally {
-    if (request === generation) {
-      busy.value = false
-      runningKind.value = null
-    }
-  }
+  const { name, groupName } = selection.value
+  if (tab.value === 'latency') await checkNode(name, groupName, 'latency', true)
+  else if (tab.value === 'info') {
+    await checkNode(name, groupName, 'info', true)
+    await checkNode(name, groupName, 'intelligence', true)
+  } else if (tab.value === 'risk') await checkNode(name, groupName, 'intelligence', true)
 }
-async function testLatency() {
+async function run(kind: 'download') {
   if (busy.value || !selection.value) return
-  const request = ++generation
-  busy.value = true
-  runningKind.value = 'latency'
-  error.value = ''
-  try {
-    await proxyLatencyTest(selection.value.name, getTestUrl(selection.value.groupName))
-  } catch {
-    if (request === generation) error.value = '延迟检测失败，请检查节点和检测地址'
-  } finally {
-    if (request === generation) {
-      busy.value = false
-      runningKind.value = null
-    }
-  }
+  await checkNode(selection.value.name, selection.value.groupName, kind, true)
 }
 </script>
 
