@@ -13,6 +13,7 @@ dist-ssr
 coverage
 data
 *.local
+compose.clashmi.local.yaml
 
 /cypress/videos/
 /cypress/screenshots/

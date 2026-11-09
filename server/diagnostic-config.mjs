@@ -185,25 +185,43 @@ export function createDiagnosticImportStore(db) {
     backend_uuid TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
     nodes_json TEXT NOT NULL, updated_at TEXT NOT NULL
   )`)
+  const columns = new Set(db.prepare('PRAGMA table_info(diagnostic_imports)').all().map(column => column.name))
+  for (const column of ['source_path', 'source_root']) {
+    if (!columns.has(column)) db.exec(`ALTER TABLE diagnostic_imports ADD COLUMN ${column} TEXT`)
+  }
   const get = db.prepare('SELECT * FROM diagnostic_imports WHERE backend_uuid = ?')
-  const put = db.prepare(`INSERT INTO diagnostic_imports VALUES (?, ?, ?, ?)
+  const put = db.prepare(`INSERT INTO diagnostic_imports (backend_uuid, fingerprint, nodes_json, updated_at, source_path, source_root) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(backend_uuid) DO UPDATE SET fingerprint=excluded.fingerprint,
-    nodes_json=excluded.nodes_json, updated_at=excluded.updated_at`)
+    nodes_json=excluded.nodes_json, updated_at=excluded.updated_at,
+    source_path=excluded.source_path, source_root=excluded.source_root`)
   return {
-    status(backend) {
+    status(backend, root) {
       const row = get.get(backend.uuid)
-      return row ? { configured: true, stale: row.fingerprint !== fingerprint(backend),
-        nodeCount: JSON.parse(row.nodes_json).length, updatedAt: row.updated_at } : { configured: false }
+      return row ? { configured: true, stale: row.fingerprint !== fingerprint(backend) || Boolean(row.source_path && root && row.source_root !== root),
+        sourceKind: row.source_path ? 'mounted' : 'import', sourcePath: row.source_path || undefined,
+        nodeCount: row.source_path ? undefined : JSON.parse(row.nodes_json).length, updatedAt: row.updated_at } : { configured: false }
     },
     read(backend) {
       const row = get.get(backend.uuid)
       if (!row) return null
       if (row.fingerprint !== fingerprint(backend))
         fail('后端地址已变化，请在编辑后端中重新导入或移除节点检测配置')
+      if (row.source_path) return null
       return JSON.parse(row.nodes_json)
     },
+    readMount(backend, root) {
+      const row = get.get(backend.uuid)
+      if (!row?.source_path) return null
+      if (row.fingerprint !== fingerprint(backend) || row.source_root !== root)
+        fail('后端地址或挂载目录已变化，请重新连接配置目录')
+      return { configPath: row.source_path }
+    },
+    bindMount(backend, root, configPath) {
+      put.run(backend.uuid, fingerprint(backend), '[]', new Date().toISOString(), configPath, root)
+      return this.status(backend, root)
+    },
     save(backend, nodes) {
-      put.run(backend.uuid, fingerprint(backend), JSON.stringify(nodes), new Date().toISOString())
+      put.run(backend.uuid, fingerprint(backend), JSON.stringify(nodes), new Date().toISOString(), null, null)
       return this.status(backend)
     },
     remove(backend) {
@@ -213,7 +231,7 @@ export function createDiagnosticImportStore(db) {
   }
 }
 
-export function registerDiagnosticImports(app, { store, readBackend, readLiveNames, download }) {
+export function registerDiagnosticImports(app, { store, readBackend, readLiveNames, download, mountedSource }) {
   const endpoint = operation => async (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
     const controller = new AbortController()
@@ -226,7 +244,22 @@ export function registerDiagnosticImports(app, { store, readBackend, readLiveNam
       if (!controller.signal.aborted) res.status(400).json({ message: error.message || '配置导入失败', ...(error.providers ? { providers: error.providers } : {}) })
     } finally { res.off('close', onClose) }
   }
-  app.post('/api/diagnostics/config/status', endpoint((_, backend) => store.status(backend)))
+  app.post('/api/diagnostics/config/status', endpoint(async (_, backend) => ({
+    ...store.status(backend, mountedSource?.root),
+    ...(mountedSource ? { mount: await mountedSource.status() } : {}),
+  })))
+  app.post('/api/diagnostics/config/mount', endpoint(async (body, backend, signal) => {
+    if (!mountedSource) fail('此部署未配置客户端数据目录挂载')
+    const candidates = await mountedSource.discover()
+    const configPath = body.configPath || (candidates.length === 1 ? candidates[0] : '')
+    if (!configPath || !candidates.includes(configPath)) fail('请选择挂载目录中的主配置；Clash Mi 请挂载包含 service_core_runtime_profile.yaml 的数据目录')
+    const nodes = await mountedSource.read({ configPath, signal })
+    const names = await readLiveNames(backend)
+    const matchedCount = nodes.filter(node => names.has(node.name)).length
+    if (!matchedCount) fail('挂载目录中的节点与当前后端不匹配，原有配置未修改')
+    signal.throwIfAborted()
+    return { ...store.bindMount(backend, mountedSource.root, configPath), matchedCount, mount: await mountedSource.status() }
+  }))
   app.post('/api/diagnostics/config/preview', endpoint(body => previewDiagnosticImport(body.configText)))
   app.post('/api/diagnostics/config/import', endpoint(async (body, backend, signal) => {
     const nodes = await resolveDiagnosticImport(body, { signal, download })

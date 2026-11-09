@@ -1,14 +1,15 @@
 ## 更新内容
 
-- 桌面客户端节点检测配置支持一次选择主 YAML，点击「导入到此后端」后自动读取其中的 HTTP / HTTPS 订阅，无需逐个上传订阅缓存。
-- 支持订阅请求头、常见重定向、内联节点与名称前后缀；最多 3 个订阅并行读取。
-- 只有读取失败或仅有本地路径的订阅才显示补选文件入口，也可直接重试。全部校验通过后才保存，失败不会覆盖已有配置。
-- 「检查配置」仅作预览，导入不再需要先点检查。订阅地址不会保存为定时任务，节点诊断和手动下载测速的触发方式保持一致。
+- 桌面 Docker 接入 Clash Mi 新增只读目录挂载：把客户端完整数据目录挂载到 `/app/clashmi`，在后端设置连接一次，之后无需逐个选择 YAML。
+- 自动识别 Clash Mi 运行配置，按原目录结构匹配 Windows / macOS 路径对应的订阅缓存。每次发起查询读取当前文件，订阅更新后无需重新导入。
+- 配置目录按后端绑定；拒绝越界路径、指向目录外的链接及无法区分的同名缓存。面板不会写入 Clash Mi 数据目录。
+- 手动 YAML 导入收起为备用方式。悬停仅展示、点击延迟只测延迟、信息/风险缓存和仅手动下载测速保持原有行为。
+- 提供 Compose 只读挂载示例与 PowerShell 7 辅助脚本。
 
-## 使用方式
+## 一次性配置
 
-更新为 `ghcr.io/fourgetu/bin-clashboard:v2.06-4` 或更新 `latest`，保留原 `/app/data` 挂载并重新创建容器。在「设置 → 修改后端配置 → 节点检测配置（桌面客户端）」选择主 YAML，直接点击「导入到此后端」。
+更新为 `ghcr.io/fourgetu/bin-clashboard:v2.06-5` 或更新 `latest`。保留原 `/app/data` 挂载，额外将包含 `service_core_runtime_profile.yaml` 的 Clash Mi 完整数据目录只读挂载到 `/app/clashmi`，重建面板容器。进入「设置 → 修改后端配置 → 节点检测配置」，点击「连接配置目录」。
 
-只有失败项才需要补选各自的节点缓存文件，不要为不同订阅重复选择主配置。面板容器须能访问订阅地址，订阅须返回 Clash / Mihomo 节点 YAML。订阅更新后需再次手动导入；不会自动进行带宽测速。
+以后更新订阅无需再次导入。信息/风险已有结果仍会缓存，手动刷新时使用当前配置；不会自动下载测速。
 
-镜像支持 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。详见 [电脑 Docker 部署说明](https://github.com/Fourgetu/Bin-ClashBoard/blob/v2.06-4/docs/desktop-docker.zh-CN.md)。
+镜像支持 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。完整步骤见 [电脑 Docker 部署说明](https://github.com/Fourgetu/Bin-ClashBoard/blob/v2.06-5/docs/desktop-docker.zh-CN.md)。

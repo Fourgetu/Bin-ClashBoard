@@ -6,10 +6,8 @@
     <summary class="cursor-pointer text-sm font-medium">节点检测配置（桌面客户端）</summary>
     <div class="mt-3 flex flex-col gap-3 text-xs">
       <p class="text-base-content/65">
-        导入 Clash Mi 等客户端当前使用的 Clash / Mihomo
-        YAML，只用于此后端的节点信息、风险和手动下载检测。 电脑 Docker 部署同样适用，无需
-        SSH。选择一次主配置并点击导入，面板会读取其中的 HTTP / HTTPS
-        订阅。配置保存在当前面板的数据目录，订阅更新后需重新导入。
+        推荐将 Clash Mi 数据目录只读挂载到 <code>/app/clashmi</code>，然后连接一次。
+        面板会在查询时读取当前主配置和订阅缓存，订阅更新后无需重新导入。
       </p>
       <p
         v-if="disabled"
@@ -23,8 +21,10 @@
       >
         {{
           status.stale
-            ? '后端地址已变化，请重新导入或移除配置'
-            : `已导入 ${status.nodeCount} 个节点`
+            ? '后端地址或目录已变化，请重新连接配置目录或导入'
+            : status.sourceKind === 'mounted'
+              ? `已连接配置目录 · ${status.sourcePath}`
+              : `当前使用手动导入的 ${status.nodeCount} 个节点`
         }}
         <span
           v-if="status.updatedAt"
@@ -37,73 +37,95 @@
         v-else-if="status"
         class="text-base-content/55"
       >
-        尚未导入。选择该客户端的配置文件即可；已配置的 SSH / 服务端来源仍可使用。
+        尚未连接配置目录。原有的 SSH / 服务端配置来源仍可使用。
       </p>
-      <label class="flex flex-col gap-1">
-        <span>配置或订阅 YAML 文件</span>
-        <input
-          class="file-input file-input-sm w-full"
-          type="file"
-          accept=".yaml,.yml,.json"
-          :disabled="locked"
-          @change="readFile($event)"
-        />
-      </label>
-      <details>
-        <summary class="text-base-content/65 cursor-pointer">或粘贴 YAML 配置</summary>
-        <textarea
-          v-model="configText"
-          class="textarea mt-2 w-full font-mono text-xs"
-          rows="5"
-          aria-label="节点检测 YAML 配置"
-          placeholder="proxies: ..."
-          spellcheck="false"
-          :disabled="locked"
-        ></textarea>
-      </details>
-      <p
-        v-if="fileName"
-        class="text-base-content/65"
-      >
-        已选择：{{ fileName }}
-      </p>
-      <p
-        v-if="preview"
-        class="text-base-content/65"
-      >
-        检测到 {{ preview.providers.length }} 个订阅，其中
-        {{
-          preview.providers.filter((provider) => provider.needsFile && provider.canDownload).length
-        }}
-        个将在点击导入后读取。仅有本地路径的订阅需要补充节点缓存。
-      </p>
-      <template v-if="missingProviders.length">
+      <div class="flex flex-col gap-2">
+        <p
+          v-if="status?.mount?.available && !status.mount.candidates.length"
+          class="text-warning"
+        >
+          目录已挂载，但未找到主配置。请选择包含 service_core_runtime_profile.yaml 的 Clash Mi
+          数据目录。
+        </p>
+        <p
+          v-else-if="status && !status.mount?.available"
+          class="text-base-content/65"
+        >
+          {{ status.mount?.message || '未检测到挂载目录，请先完成下面的 Docker 配置。' }}
+        </p>
         <label
-          v-for="provider in missingProviders"
-          :key="provider.name"
+          v-if="(status?.mount?.candidates.length || 0) > 1"
           class="flex flex-col gap-1"
         >
-          <span>订阅「{{ provider.name }}」的节点缓存 YAML</span>
-          <span class="text-warning">{{ provider.reason }}</span>
-          <input
-            class="file-input file-input-sm w-full"
-            type="file"
-            accept=".yaml,.yml,.json"
+          <span>主配置</span>
+          <select
+            v-model="mountedConfigPath"
+            class="select select-sm w-full"
             :disabled="locked"
-            @change="readFile($event, provider.name)"
-          />
-          <span
-            v-if="providerFileNames[provider.name]"
-            class="text-base-content/65"
           >
-            已选择：{{ providerFileNames[provider.name] }}
-          </span>
+            <option
+              value=""
+              disabled
+            >
+              请选择当前后端使用的主配置
+            </option>
+            <option
+              v-for="candidate in status?.mount?.candidates"
+              :key="candidate"
+              :value="candidate"
+            >
+              {{ candidate }}
+            </option>
+          </select>
         </label>
-        <p class="text-base-content/55">
-          仅需补充上面未能读取的订阅，也可直接重试导入。请选择各自包含实际节点的缓存文件，不要重复选择主配置。配置和订阅合计最多
-          6 MB。
-        </p>
-      </template>
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="locked || !status?.mount?.available || !mountedConfigPath"
+            @click="connectMount"
+          >
+            {{
+              busy === 'mount'
+                ? '正在连接…'
+                : status?.sourceKind === 'mounted'
+                  ? '重新连接配置目录'
+                  : '连接配置目录'
+            }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :disabled="locked"
+            @click="checkMount"
+          >
+            检查挂载目录
+          </button>
+          <button
+            v-if="status?.configured"
+            type="button"
+            class="btn btn-sm"
+            :disabled="locked"
+            @click="removeConfig"
+          >
+            {{ status.sourceKind === 'mounted' ? '断开配置目录' : '移除导入配置' }}
+          </button>
+        </div>
+        <details class="text-base-content/65">
+          <summary class="cursor-pointer">Docker 只需配置一次</summary>
+          <p class="mt-2">
+            在原有 Compose 服务的 volumes 中增加下面一项，把左侧路径替换为实际的 Clash Mi
+            数据目录。保留原来的 /app/data 挂载，重建容器后点击「检查挂载目录」和「连接配置目录」。
+          </p>
+          <pre class="bg-base-200 mt-2 overflow-x-auto rounded p-2 break-all whitespace-pre-wrap">
+- "C:/实际路径/ClashMi数据目录:/app/clashmi:ro"</pre
+          >
+          <p class="mt-2">
+            目录应包含 service_core_runtime_profile.yaml 及其订阅缓存；便携版通常位于程序目录的
+            portable 中。只读挂载不会修改 Clash Mi 的文件。
+          </p>
+        </details>
+      </div>
       <p
         v-if="message"
         role="status"
@@ -111,39 +133,104 @@
       >
         {{ message }}
       </p>
-      <div class="flex flex-wrap gap-2">
-        <button
-          type="button"
-          class="btn btn-sm"
-          :disabled="locked || !configText.trim()"
-          @click="checkConfig"
-        >
-          检查配置
-        </button>
-        <button
-          type="button"
-          class="btn btn-primary btn-sm"
-          :disabled="locked || !ready"
-          @click="importConfig"
-        >
-          {{
-            busy === 'import'
-              ? '正在读取订阅并导入…'
-              : missingProviders.length
-                ? '重新尝试导入'
-                : '导入到此后端'
-          }}
-        </button>
-        <button
-          v-if="status?.configured"
-          type="button"
-          class="btn btn-sm"
-          :disabled="locked"
-          @click="removeConfig"
-        >
-          移除检测配置
-        </button>
-      </div>
+      <details class="border-base-content/10 border-t pt-2">
+        <summary class="text-base-content/65 cursor-pointer">手动导入 YAML（备用）</summary>
+        <div class="mt-3 flex flex-col gap-3">
+          <p class="text-base-content/65">
+            无法挂载目录时可使用一次性导入；订阅更新后需要重新导入。只读挂载方式无需使用下方入口。
+          </p>
+          <label class="flex flex-col gap-1">
+            <span>配置或订阅 YAML 文件</span>
+            <input
+              class="file-input file-input-sm w-full"
+              type="file"
+              accept=".yaml,.yml,.json"
+              :disabled="locked"
+              @change="readFile($event)"
+            />
+          </label>
+          <details>
+            <summary class="text-base-content/65 cursor-pointer">或粘贴 YAML 配置</summary>
+            <textarea
+              v-model="configText"
+              class="textarea mt-2 w-full font-mono text-xs"
+              rows="5"
+              aria-label="节点检测 YAML 配置"
+              placeholder="proxies: ..."
+              spellcheck="false"
+              :disabled="locked"
+            ></textarea>
+          </details>
+          <p
+            v-if="fileName"
+            class="text-base-content/65"
+          >
+            已选择：{{ fileName }}
+          </p>
+          <p
+            v-if="preview"
+            class="text-base-content/65"
+          >
+            检测到 {{ preview.providers.length }} 个订阅，其中
+            {{
+              preview.providers.filter((provider) => provider.needsFile && provider.canDownload)
+                .length
+            }}
+            个将在点击导入后读取。仅有本地路径的订阅需要补充节点缓存。
+          </p>
+          <template v-if="missingProviders.length">
+            <label
+              v-for="provider in missingProviders"
+              :key="provider.name"
+              class="flex flex-col gap-1"
+            >
+              <span>订阅「{{ provider.name }}」的节点缓存 YAML</span>
+              <span class="text-warning">{{ provider.reason }}</span>
+              <input
+                class="file-input file-input-sm w-full"
+                type="file"
+                accept=".yaml,.yml,.json"
+                :disabled="locked"
+                @change="readFile($event, provider.name)"
+              />
+              <span
+                v-if="providerFileNames[provider.name]"
+                class="text-base-content/65"
+              >
+                已选择：{{ providerFileNames[provider.name] }}
+              </span>
+            </label>
+            <p class="text-base-content/55">
+              仅需补充上面未能读取的订阅，也可直接重试导入。请选择各自包含实际节点的缓存文件，不要重复选择主配置。配置和订阅合计最多
+              6 MB。
+            </p>
+          </template>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="btn btn-sm"
+              :disabled="locked || !configText.trim()"
+              @click="checkConfig"
+            >
+              检查配置
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              :disabled="locked || !ready"
+              @click="importConfig"
+            >
+              {{
+                busy === 'import'
+                  ? '正在读取订阅并导入…'
+                  : missingProviders.length
+                    ? '重新尝试导入'
+                    : '导入到此后端'
+              }}
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
   </details>
 </template>
@@ -160,10 +247,25 @@ type Status = {
   nodeCount?: number
   updatedAt?: string
   matchedCount?: number
+  sourceKind?: 'mounted' | 'import'
+  sourcePath?: string
+  mount?: { available: boolean; candidates: string[]; message?: string }
 }
 type Preview = { providers: { name: string; needsFile: boolean; canDownload: boolean }[] }
 type ProviderFailure = { name: string; reason: string }
 const status = ref<Status | null>(null)
+const mountedConfigPath = ref('')
+watch(
+  () => status.value,
+  (value) => {
+    const candidates = value?.mount?.candidates || []
+    mountedConfigPath.value = candidates.includes(value?.sourcePath || '')
+      ? value!.sourcePath!
+      : candidates.length === 1
+        ? candidates[0]!
+        : ''
+  },
+)
 const preview = ref<Preview | null>(null)
 const missingProviders = ref<ProviderFailure[]>([])
 const configText = ref('')
@@ -227,6 +329,19 @@ onMounted(() => {
     status.value = await request<Status>('status')
   })
 })
+function checkMount() {
+  void perform('status', async () => {
+    status.value = await request<Status>('status')
+  })
+}
+function connectMount() {
+  void perform('mount', async () => {
+    status.value = await request<Status>('mount', { configPath: mountedConfigPath.value })
+    await clearBackendDiagnostics(props.backendUuid)
+    configText.value = ''
+    message.value = '已连接。之后查询时读取客户端当前文件，订阅更新无需重新导入。'
+  })
+}
 async function readFile(event: Event, providerName?: string) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -255,7 +370,7 @@ function importConfig() {
       configText: configText.value,
       providerFiles: providerFiles.value,
     })
-    status.value = result
+    status.value = { ...result, mount: status.value?.mount }
     await clearBackendDiagnostics(props.backendUuid)
     configText.value = ''
     fileName.value = ''
@@ -266,9 +381,9 @@ function importConfig() {
 }
 function removeConfig() {
   void perform('remove', async () => {
-    status.value = await request<Status>('remove')
+    status.value = { ...(await request<Status>('remove')), mount: status.value?.mount }
     await clearBackendDiagnostics(props.backendUuid)
-    message.value = '已移除检测配置；客户端节点和订阅未修改。'
+    message.value = '已解除此后端的检测配置来源。'
   })
 }
 </script>
