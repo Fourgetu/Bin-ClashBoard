@@ -524,6 +524,14 @@ const trafficTitle = computed(() => {
 function selectTab(value: typeof tab.value) {
   if (busy.value && runningKind.value === 'download') return
   tab.value = value
+  if (!selection.value) return
+  const { name, groupName } = selection.value
+  // Opening the popover never requests data. Metadata is loaded only on its
+  // tab's first visit; subsequent visits reuse results, including failures.
+  if (value === 'info') {
+    void checkNode(name, groupName, 'info')
+    void checkNode(name, groupName, 'intelligence')
+  } else if (value === 'risk') void checkNode(name, groupName, 'intelligence')
 }
 watch(
   selection,

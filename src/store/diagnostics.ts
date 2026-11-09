@@ -111,6 +111,7 @@ export function checkNode(
   const key = nodeResultKey(name)
   const requestKey = JSON.stringify([key, kind])
   if (pending.has(requestKey)) return pending.get(requestKey)!
+  if (!force && kind !== 'latency' && nodeResults[key]?.[kind]) return Promise.resolve()
   if (!force && checks[key]?.[kind]) return Promise.resolve()
   checks[key] ||= {}
   checks[key][kind] = { pending: true, error: '' }
@@ -165,9 +166,6 @@ export function openNodeDiagnostics(
   diagnosticsAnchor.value = anchor
   if (nodeDiagnostics.value?.name === name && nodeDiagnostics.value.groupName === groupName) return
   nodeDiagnostics.value = { name, groupName }
-  for (const kind of ['latency', 'info', 'intelligence'] as const) {
-    void checkNode(name, groupName, kind)
-  }
 }
 watch(activeUuid, closeNodeDiagnostics)
 
