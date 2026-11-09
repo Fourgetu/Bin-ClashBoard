@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-devboard_url="http://192.168.3.22:2048"
+devboard_url="${DEVBOARD_URL:-http://192.168.3.22:2048}"
 
 cd "$project_dir"
 corepack pnpm run build
