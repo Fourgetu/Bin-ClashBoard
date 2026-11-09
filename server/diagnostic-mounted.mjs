@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse } from 'yaml'
@@ -124,6 +125,18 @@ export function createMountedDiagnosticSource(directory) {
       }
       return null
     }
+    // Clash Mi desktop writes HTTP subscription caches as proxies/<md5(url)> with no
+    // extension and no `path` in the generated proxy-providers, so the cache can only
+    // be found by hashing the subscription URL. Try the observed name variants.
+    const resolveUrlCache = async provider => {
+      if (provider?.type !== 'http' || typeof provider?.url !== 'string' || !provider.url) return null
+      const hash = createHash('md5').update(provider.url, 'utf8').digest('hex')
+      for (const name of [hash, `${hash}.yaml`, `${hash}.yml`, hash.toUpperCase()]) {
+        const file = await safeFile(realRoot, path.posix.join('proxies', name))
+        if (file) return file
+      }
+      return null
+    }
     const providerNames = new Map(Object.entries(providers).map(([key, value]) => [value, key]))
     const nodes = await loadDiagnosticNodeDependencies({
       name, nodes: Array.isArray(config.proxies) ? config.proxies : [], providers, providerOwners, runtime,
@@ -131,8 +144,10 @@ export function createMountedDiagnosticSource(directory) {
         signal?.throwIfAborted()
         const label = providerNames.get(provider)
         let entries = Array.isArray(provider?.payload) ? provider.payload : []
-        if (!entries.length && typeof provider?.path === 'string') {
-          const file = await resolveProvider(provider.path)
+        if (!entries.length) {
+          const file = typeof provider?.path === 'string'
+            ? await resolveProvider(provider.path)
+            : await resolveUrlCache(provider)
           if (file) {
             const parsed = parseConfig(await readText(file))
             entries = Array.isArray(parsed.proxies) ? parsed.proxies : []

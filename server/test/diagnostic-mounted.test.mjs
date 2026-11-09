@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -41,6 +42,33 @@ test('mounted Clash Mi runtime is preferred and absolute Windows paths map to th
     assert.ok(!JSON.stringify(await source.status()).includes(node.password))
   })
 })
+
+const md5 = value => createHash('md5').update(value, 'utf8').digest('hex')
+
+test('Clash Mi desktop HTTP providers fall back to the proxies/<md5(url)> cache without a path', async () => {
+  await fixture(async ({ write, source }) => {
+    const url = 'https://sub.example.com/api/v1/client/subscribe?token=private-fixture'
+    await write(main, { 'proxy-providers': { '69云': { type: 'http', url, override: { 'additional-prefix': '云-' } } } })
+    await write(`proxies/${md5(url)}`, { proxies: [node] })
+    const nodes = await source.read({ configPath: main })
+    assert.deepEqual(nodes.map(entry => entry.name), ['云-desktop'])
+    assert.equal(nodes[0].password, node.password)
+  })
+})
+
+test('Clash Mi desktop cache lookup accepts suffixed names and still reports a missing cache', async () => {
+  await fixture(async ({ write, source }) => {
+    const url = 'https://sub.example.com/sub?token=suffixed'
+    await write(main, { 'proxy-providers': { suffixed: { type: 'http', url } } })
+    await write(`proxies/${md5(url)}.yaml`, { proxies: [{ ...node, name: 'suffixed-node' }] })
+    assert.deepEqual((await source.read({ configPath: main })).map(entry => entry.name), ['suffixed-node'])
+
+    const missing = 'https://sub.example.com/sub?token=missing'
+    await write(main, { 'proxy-providers': { missing: { type: 'http', url: missing } } })
+    await assert.rejects(source.read({ configPath: main }), /missing.*暂无可用节点缓存/)
+  })
+})
+
 
 test('mounted node files are re-read after subscription changes and no snapshot is retained', async () => {
   await fixture(async ({ write, source }) => {
