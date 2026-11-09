@@ -18,6 +18,8 @@ import {
 import {
   DOWNLOAD_BYTES,
   DOWNLOAD_URL,
+  createProbeQueue,
+  diagnosticsErrorMessage,
   isPublicAddress,
   matchesProbeConnection,
   normalizeIntelligence,
@@ -208,6 +210,101 @@ test('public route validation rejects internal and mapped loopback addresses', (
 const listen = (server) =>
   new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 const close = (server) => new Promise((resolve) => server.close(resolve))
+test('probe queue serializes browsers and releases the slot after failure', async () => {
+  const enqueue = createProbeQueue()
+  const gate = Promise.withResolvers()
+  const order = []
+  const first = enqueue(async () => {
+    order.push('first')
+    await gate.promise
+    throw new Error('probe failed')
+  })
+  const rejected = assert.rejects(first, /probe failed/)
+  const second = enqueue(async () => {
+    order.push('second')
+    return 'ok'
+  })
+  await Promise.resolve()
+  assert.deepEqual(order, ['first'])
+  gate.resolve()
+  await rejected
+  assert.equal(await second, 'ok')
+  assert.deepEqual(order, ['first', 'second'])
+})
+
+test('aborting a queued probe never runs it or overlaps the active probe', async () => {
+  const enqueue = createProbeQueue()
+  const gate = Promise.withResolvers()
+  const first = enqueue(() => gate.promise)
+  const controller = new AbortController()
+  let cancelledRuns = 0,
+    lastRuns = 0
+  const second = enqueue(() => {
+    cancelledRuns++
+  }, controller.signal)
+  const rejected = assert.rejects(second, { name: 'AbortError' })
+  const last = enqueue(() => {
+    lastRuns++
+  })
+  controller.abort()
+  await rejected
+  assert.equal(cancelledRuns, 0)
+  assert.equal(lastRuns, 0)
+  gate.resolve()
+  await Promise.all([first, last])
+  assert.equal(lastRuns, 1)
+})
+
+test('concurrent node API queries wait and all return results instead of HTTP 409', async () => {
+  const app = express()
+  app.use(express.json())
+  let running = 0,
+    maxRunning = 0,
+    loads = 0
+  registerDiagnostics(app, {
+    readBackend: () => ({}),
+    loadNodes: async () => {
+      loads++
+      maxRunning = Math.max(maxRunning, ++running)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      running--
+      return { nodes: [{ name: 'Node', type: 'http', server: '127.0.0.1', port: 9 }] }
+    },
+  })
+  const server = http.createServer(app)
+  const port = await listen(server)
+  try {
+    const responses = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        fetch(`http://127.0.0.1:${port}/api/diagnostics/node`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Node', kind: 'info' }),
+        }),
+      ),
+    )
+    assert.deepEqual(
+      responses.map((response) => response.status),
+      [200, 200, 200],
+    )
+    for (const response of responses) assert.equal((await response.json()).server, '127.0.0.1')
+    assert.equal(loads, 3)
+    assert.equal(maxRunning, 1)
+  } finally {
+    await close(server)
+  }
+})
+
+test('diagnostic errors distinguish a TLS handshake failure from timeout', () => {
+  assert.match(
+    diagnosticsErrorMessage(
+      new Error('Client network socket disconnected before secure TLS connection was established'),
+    ),
+    /TLS.*建立前断开/,
+  )
+  assert.match(diagnosticsErrorMessage(new DOMException('aborted', 'AbortError')), /超时/)
+})
+
 test('download has one bounded GET target and the API rejects upload and missing actions', async () => {
   assert.equal(DOWNLOAD_BYTES, 10_000_000)
   assert.equal(new URL(DOWNLOAD_URL).pathname, '/__down')

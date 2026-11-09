@@ -402,11 +402,58 @@ export function parseDhcpLeases(content) {
     })
 }
 
+// Keep isolated probes serial across all browsers, without rejecting a second
+// query just because another client is still checking a node.
+export function createProbeQueue() {
+  const waiting = []
+  let active = false
+  const drain = () => {
+    if (active || !waiting.length) return
+    const job = waiting.shift()
+    active = true
+    job.signal?.removeEventListener('abort', job.abort)
+    Promise.resolve()
+      .then(() => {
+        job.signal?.throwIfAborted()
+        return job.operation()
+      })
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        active = false
+        drain()
+      })
+  }
+  return (operation, signal) =>
+    new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(signal.reason)
+      if (waiting.length >= 32)
+        return reject(Object.assign(new Error('等待检测的请求过多，请稍后刷新'), { status: 429 }))
+      const job = { operation, signal, resolve, reject, abort: null }
+      job.abort = () => {
+        const index = waiting.indexOf(job)
+        if (index !== -1) waiting.splice(index, 1)
+        signal.removeEventListener('abort', job.abort)
+        reject(signal.reason)
+      }
+      signal?.addEventListener('abort', job.abort, { once: true })
+      waiting.push(job)
+      drain()
+    })
+}
+
+export function diagnosticsErrorMessage(error) {
+  if (error.name === 'AbortError' || error.name === 'TimeoutError')
+    return '检测等待或查询超时，请点刷新重试'
+  if (/before secure TLS connection was established/.test(error.message || ''))
+    return '节点到查询站点的 TLS 连接在建立前断开，请点刷新重试'
+  return error.message || '检测失败'
+}
+
 export function registerDiagnostics(
   app,
   { readBackend, loadNodes, loadDevices, controllerFetch, binary, tempRoot },
 ) {
-  let nodeBusy = false
+  const enqueueProbe = createProbeQueue()
   const endpoint = (operation) => async (req, res) => {
     const abort = new AbortController()
     const timeout = setTimeout(() => abort.abort(), 55_000)
@@ -417,7 +464,7 @@ export function registerDiagnostics(
       if (!res.destroyed) res.json(result)
     } catch (error) {
       if (!res.destroyed)
-        res.status(error.status || 400).json({ message: error.message || '检测失败' })
+        res.status(error.status || 400).json({ message: diagnosticsErrorMessage(error) })
     } finally {
       clearTimeout(timeout)
     }
@@ -437,10 +484,7 @@ export function registerDiagnostics(
         !['info', 'intelligence', 'download'].includes(kind)
       )
         throw new Error('无效的节点检测请求')
-      if (nodeBusy)
-        throw Object.assign(new Error('已有节点检测正在进行，请稍后重试'), { status: 409 })
-      nodeBusy = true
-      try {
+      return enqueueProbe(async () => {
         const { nodes, runtime } = await loadNodes(backend, signal)
         const selected = selectProbeNodes(nodes, name, runtime)
         const node = selected.find((entry) => entry.name === name)
@@ -466,9 +510,7 @@ export function registerDiagnostics(
         return await withProbe({ binary, tempRoot, nodes, name, runtime, signal }, (proxy) =>
           testNode(proxy, kind, signal),
         )
-      } finally {
-        nodeBusy = false
-      }
+      }, signal)
     }),
   )
   app.post(
