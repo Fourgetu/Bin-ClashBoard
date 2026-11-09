@@ -134,6 +134,7 @@ export function checkNode(
           { name, kind, backendUuid, refresh: force },
           controller.signal,
         )
+        controller.signal.throwIfAborted()
         saveNodeResult(key, kind, value)
       }
     } catch (cause) {
@@ -154,6 +155,23 @@ export function checkNode(
 export function cancelNodeDownload() {
   if (!nodeDiagnostics.value) return
   controllers.get(JSON.stringify([nodeResultKey(nodeDiagnostics.value.name), 'download']))?.abort()
+}
+export async function clearBackendDiagnostics(backendUuid: string) {
+  const jobs: Promise<void>[] = []
+  for (const [requestKey, controller] of controllers) {
+    const [resultKey] = JSON.parse(requestKey) as [string, string]
+    if (JSON.parse(resultKey)[0] !== backendUuid) continue
+    controller.abort()
+    const job = pending.get(requestKey)
+    if (job) jobs.push(job)
+  }
+  await Promise.allSettled(jobs)
+  for (const key of new Set([...Object.keys(nodeResults), ...Object.keys(checks)])) {
+    if (JSON.parse(key)[0] !== backendUuid) continue
+    delete nodeResults[key]
+    delete checks[key]
+  }
+  if (activeUuid.value === backendUuid) closeNodeDiagnostics()
 }
 export function openNodeDiagnostics(
   name: string,

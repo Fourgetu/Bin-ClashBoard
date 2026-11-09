@@ -1,21 +1,18 @@
 ## 更新内容
 
-- 连接页合并路由、连接和日志入口，按来源 IP / 设备名分组，支持通过 SSH 读取 DHCP 设备名称。
-- 路由面板分别展示规则推演及内核实际连接链路；缺少上下文时明确标注待核实。
-- 节点延迟与下载速度分栏显示，悬停仅展开紧凑浮层；点击延迟数字只重新测延迟。
-- 节点信息和 Net.Coffee 风险评估首次进入标签时加载，已有结果缓存复用，支持手动刷新。
-- 风险卡片展示 IP 情报、滥用等级、代理标记、人机流量估算及完整报告入口，缺失数据不伪造为低风险。
-- 带宽检测仅支持手动下载测速，单次最多 10 MB，可中止；不测上传、不自动测速。
-- 优化 OpenClash 运行配置识别、目标订阅读取与依赖解析；并行查询节点信息和风险，短时复用配置，多个出口探测有序排队。
-- 浮层固定尺寸，使用小字号，切换标签保持高度，无可见滚动条。
+- 电脑 Docker 部署现在可以导入 Clash Mi / Mihomo 节点 YAML，无需 OpenClash、Nikki 或 SSH。
+- 后端编辑新增文件选择、粘贴配置、订阅缓存补充、导入状态和移除入口。配置按后端及控制器地址绑定，错误导入不会覆盖原配置。
+- 节点凭据仅保存在面板服务端独立数据库表，不回传到状态接口或普通浏览器设置快照。导入后清除该后端旧诊断缓存。
+- 添加 Docker Desktop 同机连接说明及电脑部署 Compose 示例，明确 `host.docker.internal`、控制器端口和 Linux `host-gateway` 的用法。
+- 悬停仅展示、点击延迟只测延迟、缓存复用和仅手动下载测速的行为保持一致。
 
-## 升级说明
+## 使用方式
 
-本次需同时更新前端和 Node 后端。Docker 用户保留原有 `/app/data` 挂载目录，更新镜像后重建面板容器即可。节点信息、风险评估和下载测速需配置 OpenClash / Nikki SSH，或挂载与当前后端一致的 Mihomo 配置；纯静态部署不支持这些后端检测功能。
+更新面板镜像并保留原来的 `/app/data` 挂载，选中桌面客户端后端，在「编辑后端 → 节点检测配置」导入该客户端当前使用的完整 YAML。若配置引用订阅缓存，按页面提示逐项补充。无需在其他人的电脑上配置任何软路由地址。
 
-正式镜像：`ghcr.io/fourgetu/bin-clashboard:v2.06-2`。支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`。
+正式镜像：`ghcr.io/fourgetu/bin-clashboard:v2.06-3`（也更新 `latest`），支持 `linux/amd64`、`linux/arm64` 和 `linux/arm/v7`。
 
-详细操作与数据范围见 [检测说明](https://github.com/Fourgetu/Bin-ClashBoard/blob/v2.06-2/docs/network-diagnostics.zh-CN.md)。
+查看 [电脑 Docker 部署说明](https://github.com/Fourgetu/Bin-ClashBoard/blob/v2.06-3/docs/desktop-docker.zh-CN.md)。订阅更新后需重新导入配置；检测在面板容器内执行，依赖宿主机专用文件或网络环境的节点仍受迁移限制。
 
 ## Docker 安装
 

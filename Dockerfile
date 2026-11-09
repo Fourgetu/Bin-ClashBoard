@@ -11,6 +11,7 @@ RUN --mount=type=cache,id=pnpm-builder-store,target=/pnpm/store \
   && corepack pnpm install --frozen-lockfile --ignore-scripts --store-dir /pnpm/store
 
 COPY . .
+RUN node --test server/test/diagnostic-config.test.mjs
 RUN pnpm build
 RUN corepack pnpm --filter bin-clashboard-server-runtime deploy --prod /runtime/server
 

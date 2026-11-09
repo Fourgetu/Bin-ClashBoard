@@ -1,0 +1,9 @@
+services:
+  bin-clashboard:
+    image: ghcr.io/fourgetu/bin-clashboard:v2.06-3
+    container_name: bin-clashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2048:2048"
+    volumes:
+      - ./data:/app/data
