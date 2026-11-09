@@ -402,6 +402,55 @@ export function parseDhcpLeases(content) {
     })
 }
 
+export async function loadDiagnosticNodeDependencies({
+  name,
+  nodes: initialNodes,
+  providers,
+  providerOwners,
+  runtime,
+  readProvider,
+}) {
+  const nodes = [...initialNodes]
+  const loaded = new Set()
+  const visited = new Set()
+  const loadProviders = async (names) => {
+    const pending = names.filter(
+      (providerName) => providers[providerName] && !loaded.has(providerName),
+    )
+    pending.forEach((providerName) => loaded.add(providerName))
+    for (let offset = 0; offset < pending.length; offset += 4) {
+      const batches = await Promise.all(
+        pending
+          .slice(offset, offset + 4)
+          .map((providerName) => readProvider(providers[providerName])),
+      )
+      nodes.push(...batches.flat())
+    }
+  }
+  const ensureNode = async (nodeName) => {
+    if (visited.has(nodeName) || ['DIRECT', 'REJECT'].includes(nodeName)) return
+    visited.add(nodeName)
+    // The core's provider membership identifies the exact subscription;
+    // node names alone are not used to guess a provider or credentials.
+    await loadProviders(providerOwners.get(nodeName) || [])
+    let matches = nodes.filter((node) => node?.name === nodeName)
+    if (!matches.length && runtime[nodeName]?.now) {
+      await ensureNode(runtime[nodeName].now)
+      return
+    }
+    // Older cores may not expose provider membership. Keep the full read
+    // as a compatibility fallback rather than omit a dialer dependency.
+    if (!matches.length) {
+      await loadProviders(Object.keys(providers))
+      matches = nodes.filter((node) => node?.name === nodeName)
+    }
+    for (const node of matches) if (node['dialer-proxy']) await ensureNode(node['dialer-proxy'])
+  }
+  if (name) await ensureNode(name)
+  else await loadProviders(Object.keys(providers))
+  return nodes
+}
+
 // Share config reads between info/risk requests. Caller cancellation must not
 // abort another caller's read. Secrets stay in memory, for a short bounded TTL.
 export function createDiagnosticConfigCache({ ttlMs = 10_000, now = Date.now } = {}) {
@@ -519,6 +568,7 @@ export function registerDiagnostics(
       const started = performance.now()
       const { nodes, runtime } = await loadNodes(backend, signal, {
         refresh: body.refresh === true,
+        name,
       })
       const configMs = Math.round(performance.now() - started)
       const selected = selectProbeNodes(nodes, name, runtime)

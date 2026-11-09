@@ -1,6 +1,6 @@
 ﻿import express from 'express'
 import { execFile } from 'node:child_process'
-import { createDiagnosticConfigCache, openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
+import { createDiagnosticConfigCache, loadDiagnosticNodeDependencies, openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -4749,10 +4749,23 @@ registerDiagnostics(app, {
   loadDevices: async (backend) => withOpenWrtSshClient(readOpenWrtRuleSourceSshConfig(backend), async (client) => {
     return parseDhcpLeases(await readRemoteFile(client, '/tmp/dhcp.leases'))
   }),
-  loadNodes: async (backend, signal, { refresh = false } = {}) => {
+  loadNodes: async (backend, signal, { refresh = false, name } = {}) => {
     const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
     const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
-    const cacheKey = createHash('sha256').update(JSON.stringify([backend.uuid, source, sshConfig])).digest('hex')
+    const [runtimeData, providerData] = await Promise.all([
+      controllerFetch(backend, '/proxies', { signal }).then(response => response.json()),
+      controllerFetch(backend, '/providers/proxies', { signal }).then(response => response.json()).catch(() => ({})),
+    ])
+    const runtime = runtimeData.proxies || {}
+    const providerOwners = new Map()
+    for (const [providerName, provider] of Object.entries(providerData.providers || {})) {
+      for (const node of provider.proxies || []) {
+        if (!providerOwners.has(node.name)) providerOwners.set(node.name, [])
+        providerOwners.get(node.name).push(providerName)
+      }
+    }
+    const selectorState = Object.entries(runtime).filter(([,node]) => node.now).map(([name,node]) => [name,node.now])
+    const cacheKey = createHash('sha256').update(JSON.stringify([backend.uuid, source, sshConfig, name, selectorState])).digest('hex')
     const loadConfig = async (configSignal) => {
       const parseDiagnosticConfig = (content) => {
         try { return parseYaml(content) }
@@ -4761,7 +4774,7 @@ registerDiagnostics(app, {
       const readNodes = async (content, configPath, readFile, pathApi) => {
         const config = parseDiagnosticConfig(content)
         const nodes = [...(Array.isArray(config?.proxies) ? config.proxies : [])]
-        const providers = Object.values(config?.['proxy-providers'] || {})
+        const providers = config?.['proxy-providers'] || {}
         const readProvider = async (provider) => {
           configSignal.throwIfAborted()
           let entries = Array.isArray(provider?.payload) ? provider.payload : []
@@ -4782,13 +4795,9 @@ registerDiagnostics(app, {
           delete override['additional-suffix']
           return entries.map((node) => ({ ...node, ...override, name: `${prefix}${node.name}${suffix}` }))
         }
-        // Bound SSH channels while avoiding a round trip per provider in series.
-        for (let offset = 0; offset < providers.length; offset += 4) {
-          const batches = await Promise.all(providers.slice(offset, offset + 4).map(readProvider))
-          nodes.push(...batches.flat())
-        }
+        const selectedNodes = await loadDiagnosticNodeDependencies({ name, nodes, providers, providerOwners, runtime, readProvider })
         configSignal.throwIfAborted()
-        return nodes
+        return selectedNodes
       }
       if (source) return readNodes(await fs.promises.readFile(source, 'utf8'), source, (file) => fs.promises.readFile(file, 'utf8'), path)
       if (!sshConfig.configured) throw new Error('请在后端设置中配置 OpenClash / Nikki SSH，以读取节点配置；也可为服务挂载 ZASHBOARD_DIAGNOSTICS_CONFIG')
@@ -4804,12 +4813,9 @@ registerDiagnostics(app, {
         return readNodes(await readRemoteFile(client, configPath), configPath, (file) => readRemoteFile(client, file), path.posix)
       })
     }
-    // Selector state must stay live even when the config snapshot is reused.
-    const [nodes, response] = await Promise.all([
-      readDiagnosticNodesCached(cacheKey, loadConfig, signal, refresh),
-      controllerFetch(backend, '/proxies', { signal }),
-    ])
-    const runtime = (await response.json()).proxies || {}
+    // Cache only the selected configuration; selectors and ownership above
+    // are live and form part of the key so a changed dialer chain is reloaded.
+    const nodes = await readDiagnosticNodesCached(cacheKey, loadConfig, signal, refresh)
     return { nodes, runtime }
   },
 })

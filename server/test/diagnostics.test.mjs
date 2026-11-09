@@ -22,6 +22,7 @@ import {
   createProbeQueue,
   diagnosticsErrorMessage,
   isPublicAddress,
+  loadDiagnosticNodeDependencies,
   matchesProbeConnection,
   normalizeIntelligence,
   openClashRuntimeConfigs,
@@ -355,6 +356,81 @@ test('failed config reads are retriable and never become cached results', async 
     /SSH failed/,
   )
   assert.deepEqual(await read('a', async () => ['Node']), ['Node'])
+})
+
+test('targeted config loading reads only the selected provider and cross-provider dialer', async () => {
+  const reads = []
+  const providers = {
+    selected: [{ name: 'Target', 'dialer-proxy': 'Group' }],
+    upstream: [{ name: 'Upstream' }],
+    unrelated: [{ name: 'Unused' }],
+  }
+  const nodes = await loadDiagnosticNodeDependencies({
+    name: 'Target',
+    nodes: [],
+    providers,
+    providerOwners: new Map([
+      ['Target', ['selected']],
+      ['Upstream', ['upstream']],
+    ]),
+    runtime: { Group: { now: 'Upstream' } },
+    readProvider: async (entries) => {
+      reads.push(entries[0].name)
+      return entries
+    },
+  })
+  assert.deepEqual(reads, ['Target', 'Upstream'])
+  assert.deepEqual(
+    nodes.map((node) => node.name),
+    ['Target', 'Upstream'],
+  )
+})
+
+test('targeted loading supports inline nodes and falls back when core membership is absent', async () => {
+  let loads = 0
+  const options = {
+    nodes: [{ name: 'Inline' }],
+    providers: { fallback: [{ name: 'ProviderNode' }] },
+    providerOwners: new Map(),
+    runtime: {},
+    readProvider: async (nodes) => {
+      loads++
+      return nodes
+    },
+  }
+  await loadDiagnosticNodeDependencies({ ...options, name: 'Inline' })
+  assert.equal(loads, 0)
+  const nodes = await loadDiagnosticNodeDependencies({ ...options, name: 'ProviderNode' })
+  assert.equal(loads, 1)
+  assert.equal(
+    nodes.some((node) => node.name === 'ProviderNode'),
+    true,
+  )
+})
+
+test('targeted loading retains duplicate-name and circular-dialer safety checks', async () => {
+  const providers = { a: [{ name: 'Same' }], b: [{ name: 'Same' }] }
+  const nodes = await loadDiagnosticNodeDependencies({
+    name: 'Same',
+    nodes: [],
+    providers,
+    providerOwners: new Map([['Same', ['a', 'b']]]),
+    runtime: {},
+    readProvider: async (nodes) => nodes,
+  })
+  assert.throws(() => selectProbeNodes(nodes, 'Same'), /重复/)
+  const cycle = await loadDiagnosticNodeDependencies({
+    name: 'A',
+    nodes: [
+      { name: 'A', 'dialer-proxy': 'B' },
+      { name: 'B', 'dialer-proxy': 'A' },
+    ],
+    providers: {},
+    providerOwners: new Map(),
+    runtime: {},
+    readProvider: async () => [],
+  })
+  assert.throws(() => selectProbeNodes(cycle, 'A'), /循环/)
 })
 
 test('basic info returns while a risk probe is still pending', async () => {
