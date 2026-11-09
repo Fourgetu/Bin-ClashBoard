@@ -4738,6 +4738,27 @@ app.use((req, res, next) => {
 })
 
 const readDiagnosticNodesCached = createDiagnosticConfigCache()
+
+/**
+ * /providers/proxies 会返回上千个节点，逐次拉取会把「节点信息」拖到 1 秒以上。
+ * 这里对控制器快照做 8 秒缓存，同一批检测共用一次拉取。
+ */
+const controllerSnapshotCache = new Map()
+const readControllerSnapshot = async (backend, signal, refresh = false) => {
+  const cached = controllerSnapshotCache.get(backend.uuid)
+  if (!refresh && cached && cached.expires > Date.now()) return cached.value
+  const [runtimeData, providerData] = await Promise.all([
+    controllerFetch(backend, '/proxies', { signal }).then((response) => response.json()),
+    controllerFetch(backend, '/providers/proxies', { signal })
+      .then((response) => response.json())
+      .catch(() => ({})),
+  ])
+  const value = { runtimeData, providerData }
+  controllerSnapshotCache.set(backend.uuid, { value, expires: Date.now() + 60_000 })
+  if (controllerSnapshotCache.size > 4)
+    controllerSnapshotCache.delete(controllerSnapshotCache.keys().next().value)
+  return value
+}
 const diagnosticImports = createDiagnosticImportStore(db)
 const mountedDiagnosticSource = createMountedDiagnosticSource(process.env.ZASHBOARD_DIAGNOSTICS_DIR || '/app/clashmi')
 const readDiagnosticBackend = (uuid) => {
@@ -4776,10 +4797,7 @@ registerDiagnostics(app, {
     const importedNodes = diagnosticImports.read(backend)
     const source = process.env.ZASHBOARD_DIAGNOSTICS_CONFIG
     const sshConfig = readOpenWrtRuleSourceSshConfig(backend)
-    const [runtimeData, providerData] = await Promise.all([
-      controllerFetch(backend, '/proxies', { signal }).then(response => response.json()),
-      controllerFetch(backend, '/providers/proxies', { signal }).then(response => response.json()).catch(() => ({})),
-    ])
+    const { runtimeData, providerData } = await readControllerSnapshot(backend, signal, refresh)
     const runtime = runtimeData.proxies || {}
     const providerOwners = new Map()
     for (const [providerName, provider] of Object.entries(providerData.providers || {})) {
@@ -4788,7 +4806,6 @@ registerDiagnostics(app, {
         providerOwners.get(node.name).push(providerName)
       }
     }
-    const selectorState = Object.entries(runtime).filter(([,node]) => node.now).map(([name,node]) => [name,node.now])
     if (mounted) {
       if (name && !Object.hasOwn(runtime, name) && !providerOwners.has(name))
         throw new Error('当前后端已没有该节点，请刷新节点列表')
@@ -4802,7 +4819,9 @@ registerDiagnostics(app, {
         throw new Error('当前后端已没有该节点，请刷新节点列表并重新导入对应配置')
       return { nodes: importedNodes, runtime }
     }
-    const cacheKey = createHash('sha256').update(JSON.stringify([backend.uuid, source, sshConfig, name, selectorState])).digest('hex')
+    // 缓存 24 小时，只有手动刷新（refresh=true）才重新读取配置；
+    // selectorState 不进 key，否则切一次节点就要重新解析整个配置。
+    const cacheKey = createHash('sha256').update(JSON.stringify([backend.uuid, source, sshConfig, name])).digest('hex')
     const loadConfig = async (configSignal) => {
       const parseDiagnosticConfig = (content) => {
         try { return parseYaml(content) }

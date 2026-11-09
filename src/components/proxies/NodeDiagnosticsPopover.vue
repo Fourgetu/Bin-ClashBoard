@@ -22,7 +22,6 @@
           >{{ tabs.find((item) => item.key === tab)?.label }}</span
         >
         <button
-          v-if="tab !== 'download'"
           type="button"
           class="hover:bg-base-200 flex size-5 items-center justify-center rounded-full"
           :disabled="busy"
@@ -82,16 +81,16 @@
             <div class="border-base-content/15 relative h-full border-l">
               <span
                 class="absolute top-2 -left-[4.5px] size-2 rounded-full"
-                :class="entry.delay > 0 ? 'bg-success' : 'bg-error'"
+                :class="latencyTone(entry.delay).dot"
               />
             </div>
             <div
-              :class="entry.delay > 0 ? 'text-success' : 'text-error'"
+              :class="latencyTone(entry.delay).text"
               class="flex items-center gap-2 whitespace-nowrap"
             >
               <span
                 class="h-1 shrink-0 rounded-full"
-                :class="entry.delay > 0 ? 'bg-success/40' : 'bg-error/40'"
+                :class="latencyTone(entry.delay).bar"
                 :style="{
                   width: (entry.delay > 0 ? Math.max(3, Math.min(30, entry.delay / 8)) : 20) + 'px',
                 }"
@@ -99,45 +98,6 @@
               {{ entry.delay > 0 ? entry.delay + 'ms' : '失败 / 超时' }}
             </div>
           </div>
-        </div>
-
-        <div
-          v-else-if="tab === 'download'"
-          class="flex h-full flex-col justify-center gap-2 py-1"
-        >
-          <div class="py-5 text-center">
-            <div class="text-3xl font-light tabular-nums">
-              {{ results.download ? results.download.mbps.toFixed(2) : '—' }}
-              <span class="text-base-content/45 text-[11px]">Mbps</span>
-            </div>
-            <div
-              v-if="results.download"
-              class="text-base-content/45 mt-2"
-              :title="formatTime(results.download.checkedAt)"
-            >
-              {{ (results.download.mbps / 8).toFixed(2) }} MB/s ·
-              {{ (results.download.bytes / 1_000_000).toFixed(0) }} MB
-            </div>
-          </div>
-          <button
-            class="btn btn-sm h-7 min-h-7 text-[11px]"
-            :class="!busy && 'btn-primary'"
-            title="仅下载，最多 10 MB，最长 30 秒"
-            :disabled="busy && runningKind !== 'download'"
-            @click="runningKind === 'download' ? cancelNodeDownload() : run('download')"
-          >
-            <span
-              v-if="busy"
-              class="loading loading-spinner loading-xs"
-            />
-            <ArrowDownTrayIcon
-              v-else
-              class="size-3.5"
-            />
-            {{
-              runningKind === 'download' ? '停止测速' : busy ? '查询中…' : '开始下载测速 · 10 MB'
-            }}
-          </button>
         </div>
 
         <dl
@@ -324,7 +284,6 @@
           :key="item.key"
           role="tab"
           :aria-selected="tab === item.key"
-          :disabled="busy && runningKind === 'download'"
           class="flex-1 rounded-full px-1 py-1 text-[11px] transition-colors"
           :class="tab === item.key ? 'bg-primary text-primary-content' : 'text-base-content/55'"
           @click="selectTab(item.key)"
@@ -338,7 +297,6 @@
 <script setup lang="ts">
 import {
   diagnosticsBusy as busy,
-  cancelNodeDownload,
   checkNode,
   closeNodeDiagnostics,
   currentNodeChecks,
@@ -349,25 +307,36 @@ import {
   nodeDiagnostics as selection,
 } from '@/store/diagnostics'
 import { getHistoryByName, proxyMap } from '@/store/proxies'
-import { ArrowDownTrayIcon, ArrowPathIcon, BoltIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { ArrowPathIcon, BoltIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { lowLatency, mediumLatency } from '@/store/settings'
+
+/**
+ * 与「设置 → 延迟」的黄 / 红阈值保持一致：
+ * < 黄色阈值 绿色，< 红色阈值 黄色，其余红色；0 表示失败 / 超时。
+ */
+const LATENCY_TONE = {
+  success: { text: 'text-success', dot: 'bg-success', bar: 'bg-success/40' },
+  warning: { text: 'text-warning', dot: 'bg-warning', bar: 'bg-warning/40' },
+  error: { text: 'text-error', dot: 'bg-error', bar: 'bg-error/40' },
+}
+const latencyTone = (delay: number) => {
+  if (!(delay > 0)) return LATENCY_TONE.error
+  if (delay < lowLatency.value) return LATENCY_TONE.success
+  if (delay < mediumLatency.value) return LATENCY_TONE.warning
+  return LATENCY_TONE.error
+}
 
 const tabs = [
   { key: 'latency', label: '延时检测' },
-  { key: 'download', label: '带宽检测' },
   { key: 'info', label: '节点信息' },
   { key: 'risk', label: '风险评估' },
 ] as const
 const tab = ref<(typeof tabs)[number]['key']>('latency')
-const runningKind = computed(() =>
-  currentNodeChecks.value.download?.pending ? 'download' : 'metadata',
-)
 const error = computed(() => {
   const kinds =
     tab.value === 'latency'
       ? (['latency'] as const)
-      : tab.value === 'download'
-        ? (['download'] as const)
         : tab.value === 'info'
           ? (['info', 'intelligence'] as const)
           : (['intelligence'] as const)
@@ -522,7 +491,6 @@ const trafficTitle = computed(() => {
     : '暂无 ASN 流量统计'
 })
 function selectTab(value: typeof tab.value) {
-  if (busy.value && runningKind.value === 'download') return
   tab.value = value
   if (!selection.value) return
   const { name, groupName } = selection.value
@@ -550,10 +518,6 @@ async function refreshTab() {
       checkNode(name, groupName, 'intelligence', true),
     ])
   } else if (tab.value === 'risk') await checkNode(name, groupName, 'intelligence', true)
-}
-async function run(kind: 'download') {
-  if (busy.value || !selection.value) return
-  await checkNode(selection.value.name, selection.value.groupName, kind, true)
 }
 </script>
 

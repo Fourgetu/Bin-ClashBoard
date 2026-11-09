@@ -182,6 +182,27 @@ const freePort = () =>
 export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal }, run) {
   const selected = selectProbeNodes(nodes, name, runtime)
   if (!selected.length) throw new Error('请选择一个实际代理节点')
+  // 部分订阅的节点名带首尾空格，而内核解析规则时会 trim，导致 MATCH 找不到代理、探测内核直接退出。
+  // 这里统一 trim，保证 proxies / proxy-groups / rules 引用的是同一个名字。
+  const probeName = String(name).trim()
+  const probeNodes = selected.map((entry) => ({
+    ...entry,
+    name: String(entry.name ?? '').trim(),
+    ...(Array.isArray(entry.proxies)
+      ? { proxies: entry.proxies.map((item) => String(item ?? '').trim()) }
+      : {}),
+  }))
+  // 面板所在网络的 DNS 常被内核 fake-ip 接管，节点域名必须先换成真实地址，
+  // 否则探测内核会去连 198.18.x，或者拿不到只有 AAAA 的节点。
+  const resolvedNodes = await Promise.all(
+    probeNodes.map(async (node) => {
+      if (node.type === 'select' || !node.server || net.isIP(node.server)) return node
+      const { address, resolved } = await resolveServerAddress(node.server, signal)
+      if (!resolved || address === node.server) return node
+      // 保留 SNI：原域名写回 servername，避免 TLS / REALITY 用 IP 当 SNI
+      return { ...node, server: address, servername: node.servername || node.server }
+    }),
+  )
   await fs.access(binary).catch(() => {
     throw new Error('缺少独立检测内核，请安装项目配套的 Mihomo')
   })
@@ -202,13 +223,23 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
       'log-level': 'silent',
       'external-controller': '',
       'find-process-mode': 'off',
-      dns: { enable: false },
+      // 独立 DNS：不用系统解析器（会被内核 fake-ip 接管），改用加密 DNS，
+      // normal 模式直接返回真实地址，不做 fake-ip。
+      dns: {
+        enable: true,
+        ipv6: true,
+        'enhanced-mode': 'normal',
+        'respect-rules': false,
+        'default-nameserver': ['223.5.5.5', '119.29.29.29'],
+        nameserver: ['https://1.1.1.1/dns-query', 'https://223.5.5.5/dns-query'],
+        'proxy-server-nameserver': ['https://1.1.1.1/dns-query', 'https://223.5.5.5/dns-query'],
+      },
       tun: { enable: false },
-      proxies: selected.filter((node) => node.type !== 'select'),
-      'proxy-groups': selected.filter((node) => node.type === 'select'),
-      rules: [`MATCH,${name}`],
+      proxies: resolvedNodes.filter((node) => node.type !== 'select'),
+      'proxy-groups': resolvedNodes.filter((node) => node.type === 'select'),
+      rules: [`MATCH,${probeName}`],
     }
-    if (name.includes(',') || /[\r\n]/.test(name))
+    if (probeName.includes(',') || /[\r\n]/.test(probeName))
       throw new Error('节点名称含有规则分隔符，无法进行独立检测')
     const configPath = path.join(directory, 'config.json')
     await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 })
@@ -225,7 +256,7 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
       exited = true
     })
     let ready = false
-    for (let attempt = 0; attempt < 60; attempt++) {
+    for (let attempt = 0; attempt < 200; attempt++) {
       signal?.throwIfAborted()
       if (exited)
         throw new Error(
@@ -233,7 +264,7 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
         )
       ready = await new Promise((resolve) => {
         const socket = net.connect({ host: '127.0.0.1', port })
-        socket.setTimeout(100)
+        socket.setTimeout(60)
         const done = (value) => {
           socket.destroy()
           resolve(value)
@@ -243,7 +274,7 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
         socket.once('timeout', () => done(false))
       })
       if (ready) break
-      await delay(100, undefined, { signal })
+      await delay(25, undefined, { signal })
     }
     if (!ready) throw new Error('检测内核启动超时')
     return await run({ host: '127.0.0.1', port, auth })
@@ -263,6 +294,44 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
     }
     await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
+}
+
+const serverAddressCache = new Map()
+
+/**
+ * 面板所在网络的 DNS 往往被内核 fake-ip 接管：域名会被解析成 198.18.x，
+ * 只有 AAAA 的节点甚至查不到记录。这里用加密 DNS（DoH）拿真实地址，并缓存 5 分钟。
+ */
+export async function resolveServerAddress(server, signal) {
+  if (!server || net.isIP(server)) return { address: server, resolved: false }
+  const cached = serverAddressCache.get(server)
+  if (cached && cached.expires > Date.now()) return cached
+  for (const [type, record] of [
+    ['A', 1],
+    ['AAAA', 28],
+  ]) {
+    try {
+      const response = await fetch(
+        `https://1.1.1.1/dns-query?name=${encodeURIComponent(server)}&type=${type}`,
+        {
+          headers: { accept: 'application/dns-json' },
+          signal: AbortSignal.any([signal, AbortSignal.timeout(4000)].filter(Boolean)),
+        },
+      )
+      if (!response.ok) continue
+      const data = await response.json()
+      const answer = (data.Answer || []).find((entry) => entry.type === record)
+      if (!answer?.data) continue
+      const value = { address: answer.data, resolved: true, expires: Date.now() + 300_000 }
+      serverAddressCache.set(server, value)
+      if (serverAddressCache.size > 200)
+        serverAddressCache.delete(serverAddressCache.keys().next().value)
+      return value
+    } catch {
+      // 加密 DNS 不可用时保持原域名，退回原有行为
+    }
+  }
+  return { address: server, resolved: false }
 }
 
 export function normalizeIntelligence(data, radar = null) {
@@ -325,9 +394,9 @@ export function normalizeIntelligence(data, radar = null) {
   }
 }
 
-async function coffeeJson(suffix, signal) {
+async function coffeeJson(suffix, signal, timeoutMs = 25_000) {
   const response = await fetch(`https://ip.net.coffee/api/${suffix}`, {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)].filter(Boolean)),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)].filter(Boolean)),
     headers: { Accept: 'application/json', 'User-Agent': 'Bin-ClashBoard-Diagnostics' },
     redirect: 'error',
   })
@@ -379,7 +448,7 @@ export async function testNode(proxy, kind, signal) {
   // Radar is ASN-wide historical data, not a measurement of this individual IP.
   const radar =
     Number.isSafeInteger(data.asn) && data.asn > 0
-      ? await coffeeJson(`ipv2/radar/${data.asn}`, signal).catch(() => null)
+      ? await coffeeJson(`ipv2/radar/${data.asn}`, signal, 1200).catch(() => null)
       : null
   signal?.throwIfAborted()
   return normalizeIntelligence(data, radar)
@@ -453,7 +522,7 @@ export async function loadDiagnosticNodeDependencies({
 
 // Share config reads between info/risk requests. Caller cancellation must not
 // abort another caller's read. Secrets stay in memory, for a short bounded TTL.
-export function createDiagnosticConfigCache({ ttlMs = 10_000, now = Date.now } = {}) {
+export function createDiagnosticConfigCache({ ttlMs = 86_400_000, now = Date.now } = {}) {
   const values = new Map()
   const loading = new Map()
   return async (key, loader, signal, refresh = false) => {
@@ -623,7 +692,10 @@ export function registerDiagnostics(
       )
         throw new Error('请输入公网域名')
       const addresses = await dns.lookup(hostname, { all: true })
-      if (!addresses.length || addresses.some(({ address }) => !isPublicAddress(address)))
+      if (
+        !addresses.length ||
+        addresses.some(({ address }) => !isPublicAddress(address) && !isKernelFakeIp(address))
+      )
         throw new Error('真实路由检测不支持私网、环回及保留地址')
       const config = await (await controllerFetch(backend, '/configs', { signal })).json()
       const port = Number(config['mixed-port'] || config.port)
@@ -717,4 +789,15 @@ export function isPublicAddress(address) {
     /^[23][0-9a-f]{3}:/i.test(address) &&
     !address.toLowerCase().startsWith('2001:db8:')
   )
+}
+
+/**
+ * mihomo / OpenClash 的 fake-ip 段（默认 198.18.0.0/15）。
+ * 命中说明域名由内核代理解析，此时经内核 HTTP 代理探测反而能得到真实链路，
+ * 因此不按「保留地址」拒绝。
+ */
+export function isKernelFakeIp(address) {
+  if (net.isIP(address) !== 4) return false
+  const [a, b] = address.split('.').map(Number)
+  return a === 198 && (b === 18 || b === 19)
 }
