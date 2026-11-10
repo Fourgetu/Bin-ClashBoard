@@ -40,7 +40,7 @@
         {{ typeDescription }}
       </span>
       <NodeDiagnosticsBadge
-        :name="node.name"
+        :name="diagnosticsName"
         :group-name="groupName"
         :loading="isLatencyTesting"
         :class="isSmallCard && 'h-4!'"
@@ -53,7 +53,7 @@
 import { PROXY_CARD_SIZE, PROXY_SORT_TYPE } from '@/constant'
 import { checkTruncation } from '@/helper/tooltip'
 import { scrollIntoCenter } from '@/helper/utils'
-import { getIPv6ByName, getTestUrl, proxyLatencyTest, proxyMap } from '@/store/proxies'
+import { getIPv6ByName, getNowProxyNodeName, getTestUrl, proxyLatencyTest, proxyMap } from '@/store/proxies'
 import { IPv6test, proxyCardSize, proxySortType, theme, truncateProxyName } from '@/store/settings'
 import { smartWeightsMap } from '@/store/smart'
 import { twMerge } from 'tailwind-merge'
@@ -90,6 +90,8 @@ const props = defineProps<{
 
 const cardRef = ref()
 const node = computed(() => proxyMap.value[props.name])
+// 策略组不能直接做节点检测，这里沿它当前的选择下钻到真实节点，组卡片也能查到信息
+const diagnosticsName = computed(() => getNowProxyNodeName(props.name))
 const isLatencyTesting = ref(false)
 const typeFormatter = (type: string) => {
   type = type.toLowerCase()
