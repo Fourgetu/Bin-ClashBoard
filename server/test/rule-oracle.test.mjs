@@ -6,6 +6,7 @@ import {
   buildRuleOracleConfig,
   findRuleIndex,
   parseMatchLine,
+  contextRuleMayMatch,
   resolveRuleProviders,
   selectProbeEvidence,
 } from '../rule-oracle.mjs'
@@ -88,7 +89,11 @@ test('oracle config drops rules whose rule set has no local cache and builds sin
   )
   assert.equal(built.config['proxy-groups'][0].proxies.length, 1)
   assert.ok(built.config.proxies[0].name.startsWith('__oracle'))
-  assert.deepEqual(built.contextRules, ['AND,((NETWORK,UDP),(DST-PORT,500)),VoWiFi'])
+  assert.deepEqual(built.contextRules, [])
+  assert.equal(contextRuleMayMatch('AND,((NETWORK,UDP),(DST-PORT,500)),VoWiFi'), false)
+  assert.equal(contextRuleMayMatch('AND,((NETWORK,TCP),(DST-PORT,443)),SomeGroup'), true)
+  assert.equal(contextRuleMayMatch('AND,((NETWORK,TCP),(DST-PORT,80)),SomeGroup'), false)
+  assert.equal(contextRuleMayMatch('PROCESS-NAME,chrome.exe,SomeGroup'), true)
 })
 
 test('rule index lookup normalizes kernel type names', () => {

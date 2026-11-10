@@ -45,6 +45,15 @@ const isWildcardTarget = (name) => !name || name === 'DIRECT' || name === 'REJEC
 // 只按域名判定时，这些规则需要端口、网络、进程或入站上下文，本次判定无法覆盖。
 const CONTEXT_RULE = /^(AND|OR|NOT)$|^(NETWORK|DST-PORT|SRC-PORT|SRC-IP-CIDR|SRC-IP-CIDR6|INBOUND|PROCESS-NAME)$/i
 
+// 判定上下文固定为 TCP/443：UDP 专用或限定其它端口的条件规则不可能命中，不必提示"结果可能不同"。
+export function contextRuleMayMatch(rule) {
+  const text = String(rule).toUpperCase()
+  if (/\bUDP\b/.test(text) && !/\bTCP\b/.test(text)) return false
+  const ports = [...text.matchAll(/DST-PORT,?\s*\(?(\d{1,5})/g)].map((match) => Number(match[1]))
+  if (ports.length && !ports.includes(443)) return false
+  return true
+}
+
 export function ruleTargetOf(rule) {
   const parts = String(rule).split(',')
   return parts[parts.length - 1].trim()
@@ -153,7 +162,9 @@ export async function buildRuleOracleConfig(
     },
     missing,
     droppedRules,
-    contextRules: rules.filter((rule) => CONTEXT_RULE.test(String(rule).split(',')[0].trim())),
+    contextRules: rules.filter(
+      (rule) => CONTEXT_RULE.test(String(rule).split(',')[0].trim()) && contextRuleMayMatch(rule),
+    ),
   }
 }
 
@@ -362,29 +373,33 @@ export function createRuleOracle({
     touch()
     const port = oracleConfig['mixed-port']
     const log = () => child?.oracleLog?.() || ''
-    const marker = log().length
-    await new Promise((resolve) => {
-      const request = http.request({ host: '127.0.0.1', port, method: 'CONNECT', path: `${host}:443` })
-      request.on('connect', (_res, socket) => {
-        socket.destroy()
-        resolve()
-      })
-      request.on('error', () => resolve())
-      request.setTimeout(5000, () => {
-        request.destroy()
-        resolve()
-      })
-      request.end()
-    })
     let line = ''
-    for (let attempt = 0; attempt < 25; attempt++) {
-      line = log()
-        .slice(marker)
-        .split(/\r?\n/)
-        .filter((entry) => parseMatchLine(entry)?.host === host)
-        .slice(-1)[0]
-      if (line) break
-      await delay(40)
+    // 内核刚起来时规则集可能仍在装载，首个 CONNECT 偶尔拿不到命中记录：重试几次即可。
+    for (let attempt = 0; attempt < 3 && !line; attempt++) {
+      const marker = log().length
+      await new Promise((resolve) => {
+        const request = http.request({ host: '127.0.0.1', port, method: 'CONNECT', path: `${host}:443` })
+        request.on('connect', (_res, socket) => {
+          socket.destroy()
+          resolve()
+        })
+        request.on('error', () => resolve())
+        request.setTimeout(5000, () => {
+          request.destroy()
+          resolve()
+        })
+        request.end()
+      })
+      for (let poll = 0; poll < 25; poll++) {
+        line = log()
+          .slice(marker)
+          .split(/\r?\n/)
+          .filter((entry) => parseMatchLine(entry)?.host === host)
+          .slice(-1)[0]
+        if (line) break
+        await delay(40)
+      }
+      if (!line) await delay(120)
     }
     touch()
     const match = parseMatchLine(line)
