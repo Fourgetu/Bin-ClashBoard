@@ -148,10 +148,24 @@ test('missing Net.Coffee risk fields are unknown, never marked clean or zero', (
   assert.equal(result.flags.is_vpn, null)
   assert.equal(result.trustScore, null)
   assert.equal(result.httpThreat, null)
+  assert.equal(result.httpThreatState, 'unknown')
   assert.equal(result.threats, null)
   assert.equal(result.humanTraffic, null)
   assert.equal(result.source, 'Net.Coffee')
   assert.throws(() => normalizeIntelligence({ ip: 'invalid' }))
+})
+test('a null honeypot count with intelligence present means clean, not missing', () => {
+  const clean = normalizeIntelligence({ ip: '82.22.31.236', intelligence: { rep_threat: null, threats: [], abuser_level: 'low' } })
+  assert.equal(clean.httpThreat, null)
+  assert.equal(clean.httpThreatState, 'clean')
+
+  const zero = normalizeIntelligence({ ip: '82.22.31.236', intelligence: { rep_threat: 0 } })
+  assert.equal(zero.httpThreat, 0)
+  assert.equal(zero.httpThreatState, 'count')
+
+  const listed = normalizeIntelligence({ ip: '82.22.31.236', intelligence: { rep_threat: 12 } })
+  assert.equal(listed.httpThreat, 12)
+  assert.equal(listed.httpThreatState, 'count')
 })
 test('Net.Coffee scoring preserves zero and ASN statistics without inventing IP estimates', () => {
   const result = normalizeIntelligence(

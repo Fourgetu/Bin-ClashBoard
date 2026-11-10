@@ -384,8 +384,16 @@ export function normalizeIntelligence(data, radar = null) {
     threats: Array.isArray(data.intelligence?.threats)
       ? data.intelligence.threats.filter((value) => typeof value === 'string').slice(0, 20)
       : null,
+    // rep_threat 为数字=收录条数；为 null 但情报对象存在=没有蜜罐记录（网站显示「纯净」）；
+    // 情报对象缺失才是真的没数据，三者要分开返回，避免把「干净」显示成「暂无数据」。
     httpThreat:
       typeof data.intelligence?.rep_threat === 'number' ? data.intelligence.rep_threat : null,
+    httpThreatState:
+      typeof data.intelligence?.rep_threat === 'number'
+        ? 'count'
+        : data.intelligence && typeof data.intelligence === 'object'
+          ? 'clean'
+          : 'unknown',
     rpki: ['valid', 'invalid', 'notfound'].includes(String(data.rpki_status).toLowerCase())
       ? String(data.rpki_status).toLowerCase()
       : '',

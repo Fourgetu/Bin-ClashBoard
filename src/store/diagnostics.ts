@@ -36,6 +36,7 @@ export type Intelligence = {
   abuseScore: string
   threats: string[] | null
   httpThreat: number | null
+  httpThreatState: 'count' | 'clean' | 'unknown'
   rpki: string
   reportUrl: string
   humanTraffic: {

@@ -192,7 +192,7 @@
             <dt class="text-base-content/45">HTTP 蜜罐黑名单</dt>
             <dd
               class="text-right"
-              :class="results.intelligence?.httpThreat ? 'text-error' : 'text-base-content/45'"
+                :class="(results.intelligence?.httpThreat ?? 0) > 0 ? 'text-error' : 'text-base-content/45'"
             >
               {{ httpThreatLabel }}
             </dd>
@@ -467,8 +467,11 @@ const abuseClass = computed(() => {
         : 'text-base-content/45'
 })
 const httpThreatLabel = computed(() => {
-  const value = results.value.intelligence?.httpThreat
-  return value == null ? '暂无数据' : value === 0 ? '未发现记录' : `已收录 · ${value}`
+  const intelligence = results.value.intelligence
+  const value = intelligence?.httpThreat
+  if (typeof value === 'number') return value === 0 ? '纯净（无记录）' : `已收录 · ${value}`
+  if (intelligence?.httpThreatState === 'clean') return '纯净（无记录）'
+  return '暂无数据'
 })
 const rpkiLabel = computed(
   () =>
