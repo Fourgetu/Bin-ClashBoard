@@ -44,11 +44,42 @@
               >
                 {{ t('ruleLookupTopMatches') }}
               </div>
+              <div
+                v-if="ruleLookupEngine"
+                class="card app-card-padding text-sm"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="badge badge-success badge-sm">规则引擎</span>
+                  <span class="font-medium">
+                    第 {{ ruleLookupEngine.ruleIndex + 1 }} 条 ·
+                    {{
+                      ruleLookupEngine.rulePayload
+                        ? `${ruleLookupEngine.ruleType}(${ruleLookupEngine.rulePayload})`
+                        : ruleLookupEngine.ruleType
+                    }}
+                  </span>
+                  <span class="text-base-content/60"
+                    >→ {{ ruleLookupEngine.target || '—' }}</span
+                  >
+                </div>
+                <div class="text-base-content/60 mt-1 text-xs">
+                  按内核本地规则与规则集判定：不依赖面板规则缓存，也不访问目标站点，未访问过的域名同样适用。
+                </div>
+                <div
+                  v-if="ruleLookupEngine.missingProviders.length"
+                  class="text-warning mt-1 text-xs"
+                >
+                  缺少本地缓存的规则集：{{
+                    ruleLookupEngine.missingProviders.join('、')
+                  }}（相关规则已跳过）
+                </div>
+              </div>
               <RuleFallbackCard
                 v-if="
                   ruleLookupResults.length === 0 &&
                   ruleLookupDirectRules.length === 0 &&
-                  ruleLookupFallbackRule
+                  ruleLookupFallbackRule &&
+                  (!ruleLookupEngine || ruleLookupEngine.ruleType === 'Match')
                 "
                 :rule="ruleLookupFallbackRule"
               />
@@ -138,6 +169,7 @@ import {
   ruleCacheTotalRules,
   ruleLookupDirectRules,
   ruleLookupError,
+  ruleLookupEngine,
   ruleLookupFallbackRule,
   ruleLookupResults,
   ruleLookupUnsupported,

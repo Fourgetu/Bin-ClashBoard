@@ -72,6 +72,15 @@ export const ruleLookupResults = ref<
     linkedRules: Rule[]
   }[]
 >([])
+export const ruleLookupEngine = ref<{
+  ruleIndex: number
+  ruleType: string
+  rulePayload: string
+  target: string
+  incomplete: boolean
+  missingProviders: string[]
+  droppedRules: string[]
+} | null>(null)
 export const ruleLookupDirectRules = ref<Rule[]>([])
 export const ruleLookupUnsupported = ref<
   {
@@ -458,6 +467,7 @@ export const searchRuleByQuery = async () => {
 
   if (!isRuleLookupQuery.value) {
     ruleLookupResults.value = []
+    ruleLookupEngine.value = null
     ruleLookupDirectRules.value = []
     ruleLookupUnsupported.value = []
     ruleLookupLiveErrors.value = []
@@ -470,6 +480,7 @@ export const searchRuleByQuery = async () => {
 
   if (!query) {
     ruleLookupResults.value = []
+    ruleLookupEngine.value = null
     ruleLookupDirectRules.value = []
     ruleLookupUnsupported.value = []
     ruleLookupLiveErrors.value = []
@@ -543,6 +554,8 @@ export const searchRuleByQuery = async () => {
       return
     }
 
+    const engine = (data as unknown as { engine?: typeof ruleLookupEngine.value }).engine
+    ruleLookupEngine.value = engine ?? null
     ruleLookupResults.value = data.matches
       .map((item) => ({
         providerName: item.name,
@@ -580,6 +593,7 @@ export const searchRuleByQuery = async () => {
     }
 
     ruleLookupResults.value = []
+    ruleLookupEngine.value = null
     ruleLookupDirectRules.value = []
     ruleLookupUnsupported.value = []
     ruleLookupLiveErrors.value = []

@@ -4816,15 +4816,17 @@ registerDiagnosticImports(app, {
   },
 })
 
+// 规则判定内核：只带规则与规则集，按需启动、空闲自动退出，用于任意域名（含未访问过）的路由判定。
+const ruleOracle = createRuleOracle({
+  binary: mihomoBinaryPath,
+  mountDir: mountedDiagnosticSource.root,
+  tempRoot: path.join(dataDir, 'diagnostic-temp'),
+})
+
 registerDiagnostics(app, {
   binary: mihomoBinaryPath,
   tempRoot: path.join(dataDir, 'diagnostic-temp'),
-  // 规则判定内核：只带规则与规则集，按需启动、空闲自动退出，用于任意域名（含未访问过）的路由判定。
-  ruleOracle: createRuleOracle({
-    binary: mihomoBinaryPath,
-    mountDir: mountedDiagnosticSource.root,
-    tempRoot: path.join(dataDir, 'diagnostic-temp'),
-  }),
+  ruleOracle,
   controllerFetch,
   readBackend: readDiagnosticBackend,
   loadDevices: async (backend) => withOpenWrtSshClient(readOpenWrtRuleSourceSshConfig(backend), async (client) => {
@@ -5144,11 +5146,18 @@ app.post('/api/rule-provider-search', async (req, res) => {
   }
 
   try {
-    res.json(
-      await searchRuleProviderCache(query, {
-        rules,
-      }),
-    )
+    const result = await searchRuleProviderCache(query, { rules })
+    // 规则缓存只覆盖面板自己抓取的规则源，可能和内核里的规则集命名完全不同；
+    // 用规则引擎按内核本地规则集再判一次，避免页面把规则集命中的域名误报成"落到兜底"。
+    const hostname = query.trim().toLowerCase()
+    if (ruleOracle && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(hostname)) {
+      try {
+        result.engine = await ruleOracle.decide(hostname)
+      } catch (error) {
+        result.engineError = error instanceof Error ? error.message : String(error)
+      }
+    }
+    res.json(result)
   } catch (error) {
     res.status(500).json({
       message: error instanceof Error ? error.message : String(error),
