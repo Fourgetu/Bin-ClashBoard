@@ -179,7 +179,16 @@ const freePort = () =>
     })
   })
 
-export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal }, run) {
+
+// Mihomo 先绑定监听端口、后完成代理初始化：端口刚可连时就发 CONNECT 会先拿到 200，
+// 随后隧道被 RST（表现为「TLS 连接在建立前断开」）。所以用内核自己打印的监听日志
+// 作为「代理已可服务」的就绪信号，而不是只看 TCP 是否可连。
+const PROXY_SERVING_PATTERN = /proxy listening at/i
+export const isProxyServing = (log) => PROXY_SERVING_PATTERN.test(String(log || ''))
+export async function withProbe(
+  { binary, tempRoot, nodes, name, runtime, signal, spawnCore = spawn },
+  run,
+) {
   const selected = selectProbeNodes(nodes, name, runtime)
   if (!selected.length) throw new Error('请选择一个实际代理节点')
   // 部分订阅的节点名带首尾空格，而内核解析规则时会 trim，导致 MATCH 找不到代理、探测内核直接退出。
@@ -243,10 +252,16 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
       throw new Error('节点名称含有规则分隔符，无法进行独立检测')
     const configPath = path.join(directory, 'config.json')
     await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 })
-    child = spawn(binary, ['-d', directory, '-f', configPath], {
+    child = spawnCore(binary, ['-d', directory, '-f', configPath], {
       windowsHide: true,
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
+    let coreLog = ''
+    const collectCoreLog = (chunk) => {
+      if (coreLog.length < 64_000) coreLog += chunk.toString()
+    }
+    child.stdout?.on('data', collectCoreLog)
+    child.stderr?.on('data', collectCoreLog)
     let startError
     child.on('error', (error) => {
       startError = error
@@ -256,6 +271,7 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
       exited = true
     })
     let ready = false
+    let readySince = 0
     for (let attempt = 0; attempt < 200; attempt++) {
       signal?.throwIfAborted()
       if (exited)
@@ -273,7 +289,12 @@ export async function withProbe({ binary, tempRoot, nodes, name, runtime, signal
         socket.once('error', () => done(false))
         socket.once('timeout', () => done(false))
       })
-      if (ready) break
+      if (ready) {
+        if (!readySince) readySince = Date.now()
+        // 端口可连不代表代理链路已就绪：等到内核自己报告 mixed 端口开始监听，
+        // 或兜底 1.2s（老版本内核日志格式变化时不至于一直等）。
+        if (isProxyServing(coreLog) || Date.now() - readySince > 1200) break
+      }
       await delay(25, undefined, { signal })
     }
     if (!ready) throw new Error('检测内核启动超时')

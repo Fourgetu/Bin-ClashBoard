@@ -1,11 +1,14 @@
 import express from 'express'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import {
   canonicalIP,
@@ -22,6 +25,7 @@ import {
   createProbeQueue,
   diagnosticsErrorMessage,
   isPublicAddress,
+  isProxyServing,
   loadDiagnosticNodeDependencies,
   matchesProbeConnection,
   normalizeIntelligence,
@@ -608,6 +612,68 @@ test('isolated Mihomo probe cleans its credentials and child process on failure'
         },
       ),
       /intentional fixture failure/,
+    )
+    assert.deepEqual(await fs.readdir(tempRoot), [])
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('proxy readiness only accepts the core listener log', () => {
+  assert.equal(isProxyServing(''), false)
+  assert.equal(isProxyServing('level=info msg="Start initial configuration in progress"'), false)
+  assert.equal(
+    isProxyServing('level=info msg="Mixed(http+socks) proxy listening at: 127.0.0.1:12345"'),
+    true,
+  )
+})
+test('probe waits for the core listener log instead of the first open TCP port', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'bin-probe-ready-'))
+  const logDelayMs = 300
+  const spawnCore = (binary, argv) => {
+    const child = new EventEmitter()
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    const port = JSON.parse(readFileSync(argv[argv.indexOf('-f') + 1], 'utf8'))['mixed-port']
+    const sockets = new Set()
+    const server = net.createServer((socket) => {
+      sockets.add(socket)
+      socket.on('close', () => sockets.delete(socket))
+      socket.destroy()
+    })
+    server.listen(port, '127.0.0.1')
+    let exited = false
+    child.kill = () => {
+      if (exited) return true
+      exited = true
+      for (const socket of sockets) socket.destroy()
+      server.close()
+      setImmediate(() => child.emit('exit', null, 'SIGKILL'))
+      return true
+    }
+    setTimeout(() => {
+      child.stdout.write(
+        `level=info msg="Mixed(http+socks) proxy listening at: 127.0.0.1:${port}"\n`,
+      )
+    }, logDelayMs)
+    return child
+  }
+  try {
+    const started = Date.now()
+    await withProbe(
+      {
+        binary: process.execPath,
+        tempRoot,
+        nodes: [{ name: 'fixture', type: 'http', server: '127.0.0.1', port: 9 }],
+        name: 'fixture',
+        signal: new AbortController().signal,
+        spawnCore,
+      },
+      async (proxy) => {
+        assert.equal(proxy.host, '127.0.0.1')
+        assert.ok(proxy.auth.startsWith('probe:'))
+        assert.ok(Date.now() - started >= logDelayMs - 40, '必须等内核报告监听后再请求')
+      },
     )
     assert.deepEqual(await fs.readdir(tempRoot), [])
   } finally {
