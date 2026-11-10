@@ -2,6 +2,7 @@ import express from 'express'
 import { execFile } from 'node:child_process'
 import { createDiagnosticImportStore, registerDiagnosticImports } from './diagnostic-config.mjs'
 import { createMountedDiagnosticSource } from './diagnostic-mounted.mjs'
+import { createRuleOracle } from './rule-oracle.mjs'
 import { createDiagnosticConfigCache, loadDiagnosticNodeDependencies, openClashRuntimeConfigs, parseDhcpLeases, registerDiagnostics } from './diagnostics.mjs'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
@@ -4818,6 +4819,12 @@ registerDiagnosticImports(app, {
 registerDiagnostics(app, {
   binary: mihomoBinaryPath,
   tempRoot: path.join(dataDir, 'diagnostic-temp'),
+  // 规则判定内核：只带规则与规则集，按需启动、空闲自动退出，用于任意域名（含未访问过）的路由判定。
+  ruleOracle: createRuleOracle({
+    binary: mihomoBinaryPath,
+    mountDir: mountedDiagnosticSource.root,
+    tempRoot: path.join(dataDir, 'diagnostic-temp'),
+  }),
   controllerFetch,
   readBackend: readDiagnosticBackend,
   loadDevices: async (backend) => withOpenWrtSshClient(readOpenWrtRuleSourceSshConfig(backend), async (client) => {

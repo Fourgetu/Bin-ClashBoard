@@ -8,6 +8,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import tls from 'node:tls'
+import { selectProbeEvidence } from './rule-oracle.mjs'
 
 export const DOWNLOAD_BYTES = 10_000_000
 export const DOWNLOAD_URL = `https://speed.cloudflare.com/__down?bytes=${DOWNLOAD_BYTES}`
@@ -622,8 +623,25 @@ export function diagnosticsErrorMessage(error) {
 
 export function registerDiagnostics(
   app,
-  { readBackend, loadNodes, loadDevices, controllerFetch, binary, tempRoot, runProbe = withProbe },
+  {
+    readBackend,
+    loadNodes,
+    loadDevices,
+    controllerFetch,
+    binary,
+    tempRoot,
+    runProbe = withProbe,
+    ruleOracle = null,
+  },
 ) {
+  const oracleDecision = async (hostname) => {
+    if (!ruleOracle) return { decision: null, error: '未配置客户端数据目录挂载，无法离线判定规则' }
+    try {
+      return { decision: await ruleOracle.decide(hostname), error: '' }
+    } catch (error) {
+      return { decision: null, error: error.message || '规则判定失败' }
+    }
+  }
   const enqueueProbe = createProbeQueue()
   const endpoint = (operation) => async (req, res) => {
     const abort = new AbortController()
@@ -696,6 +714,7 @@ export function registerDiagnostics(
     endpoint(async (body, backend, signal) => {
       const input = String(body.target || '').trim()
       if (!input || input.length > 2048) throw new Error('请输入有效域名或 HTTPS 地址')
+      const mode = body.mode === 'rule' || body.mode === 'real' ? body.mode : 'both'
       const url = new URL(input.includes('://') ? input : `https://${input}`)
       if (
         url.protocol !== 'https:' ||
@@ -703,7 +722,7 @@ export function registerDiagnostics(
         url.password ||
         (url.port && url.port !== '443')
       )
-        throw new Error('真实路由检测仅支持不含凭据的 HTTPS 443 地址')
+        throw new Error('路由检测仅支持不含凭据的 HTTPS 443 地址')
       const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
       if (
         hostname === 'localhost' ||
@@ -712,18 +731,53 @@ export function registerDiagnostics(
         !hostname.includes('.')
       )
         throw new Error('请输入公网域名')
-      const addresses = await dns.lookup(hostname, { all: true })
+
+      // 规则判定：只读挂载目录里的规则与规则集，不访问目标站点，任意域名都能判。
+      const decided = await oracleDecision(hostname)
+      const record = {
+        target: url.href,
+        hostname,
+        mode,
+        source: '面板服务器 → 内核 HTTP 代理入口',
+        checkedAt: new Date().toISOString(),
+        oracle: decided.decision,
+        oracleError: decided.error,
+      }
+      if (mode === 'rule')
+        return {
+          ...record,
+          status: null,
+          elapsedMs: 0,
+          evidence: null,
+          attribution: null,
+          hit: buildRouteHit(null, decided.decision),
+        }
+
+      const addresses = await dns.lookup(hostname, { all: true }).catch(() => [])
       if (
         !addresses.length ||
         addresses.some(({ address }) => !isPublicAddress(address) && !isKernelFakeIp(address))
       )
-        throw new Error('真实路由检测不支持私网、环回及保留地址')
+        throw new Error('真实路由检测不支持私网、环回及保留地址，可仅查看规则判定')
       const config = await (await controllerFetch(backend, '/configs', { signal })).json()
       const port = Number(config['mixed-port'] || config.port)
       if (!(port > 0 && port < 65536))
-        throw new Error('内核未开放 HTTP / mixed 代理端口，仍可查看下方真实连接记录')
-      let evidence = null
+        throw new Error('内核未开放 HTTP / mixed 代理入口，可仅查看规则判定')
+
+      const snapshot = async () => {
+        try {
+          const data = await (await controllerFetch(backend, '/connections', { signal })).json()
+          return Array.isArray(data.connections) ? data.connections : []
+        } catch {
+          return null
+        }
+      }
+      const before = await snapshot()
+      const beforeIds = new Set((before || []).map((connection) => connection.id).filter(Boolean))
+      const hostIps = addresses.map(({ address }) => address)
       const startedAt = Date.now()
+      let evidence = null
+      let attribution = { matchedBy: '', ambiguous: false, degraded: before === null }
       const result = await proxyGet(
         { host: backend.host, port, auth: process.env.ZASHBOARD_DIAGNOSTICS_PROXY_AUTH || '' },
         url.href,
@@ -732,30 +786,60 @@ export function registerDiagnostics(
           collect: false,
           maxBytes: 64_000,
           onTunnel: async (socket) => {
-            for (let attempt = 0; attempt < 4; attempt++) {
-              const data = await (await controllerFetch(backend, '/connections', { signal })).json()
-              // Require the same source address, port, destination and a recent start.
-              // NAT or clock skew can prevent attribution; return no evidence in that case.
-              evidence =
-                (data.connections || []).find((connection) =>
-                  matchesProbeConnection(connection, socket, hostname, startedAt),
-                ) || null
-              if (evidence) break
+            for (let attempt = 0; attempt < 12; attempt++) {
+              const connections = await snapshot()
+              if (connections) {
+                const picked = selectProbeEvidence({
+                  before: beforeIds,
+                  connections,
+                  hostname,
+                  hostIps,
+                  startedAt,
+                  socket,
+                })
+                if (picked.connection) {
+                  evidence = picked.connection
+                  attribution = {
+                    matchedBy: picked.matchedBy,
+                    ambiguous: picked.ambiguous,
+                    degraded: attribution.degraded,
+                  }
+                  break
+                }
+              }
               await delay(100, undefined, { signal })
             }
           },
         },
       )
       return {
+        ...record,
         status: result.status,
         elapsedMs: result.elapsedMs,
-        checkedAt: new Date().toISOString(),
         evidence,
-        source: '面板服务器 → 内核 HTTP 代理入口',
-        target: url.href,
+        attribution,
+        hit: buildRouteHit(evidence, decided.decision),
       }
     }),
   )
+}
+
+// 面板展示用的统一结论：规则序号/命中类型来自规则判定，链路与出口节点来自实测连接。
+export function buildRouteHit(connection, decision) {
+  const chains = Array.isArray(connection?.chains) ? connection.chains.filter(Boolean) : []
+  const group = chains.length ? chains[chains.length - 1] : decision?.target || ''
+  return {
+    ruleIndex: Number.isInteger(decision?.ruleIndex) ? decision.ruleIndex : -1,
+    ruleType: decision?.ruleType || connection?.rule || '',
+    rulePayload: decision?.rulePayload || connection?.rulePayload || '',
+    group,
+    chains,
+    node: chains[0] || '',
+    fromOracle: Boolean(decision),
+    incomplete: Boolean(decision?.incomplete),
+    missingProviders: decision?.missingProviders || [],
+    droppedRules: Array.isArray(decision?.droppedRules) ? decision.droppedRules.length : 0,
+  }
 }
 
 function canonicalProbeIP(address) {

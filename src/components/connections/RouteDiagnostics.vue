@@ -47,29 +47,45 @@
               <h2 class="text-sm font-semibold">
                 规则路由
                 <span
+                  v-if="routeHit"
+                  class="badge badge-success badge-xs ml-1"
+                  >{{ routeHit.fromOracle ? '规则引擎' : '实测' }}</span
+                >
+                <span
+                  v-else-if="probing"
+                  class="badge badge-warning badge-soft badge-xs ml-1"
+                  >判定中</span
+                >
+                <span
+                  v-else
                   class="badge badge-xs ml-1"
                   :class="predictionTone"
                   >{{ predictionLabel }}</span
                 >
                 <span
-                  v-if="prediction && prediction.index"
+                  v-if="routeHit && routeHit.ruleIndex >= 0"
                   class="text-base-content/50 ml-1 text-xs"
-                  >命中第 {{ prediction.index }} 条规则</span
+                  >命中第 {{ routeHit.ruleIndex + 1 }} 条规则</span
+                >
+                <span
+                  v-else-if="!routeHit && prediction && prediction.index"
+                  class="text-base-content/50 ml-1 text-xs"
+                  >推演第 {{ prediction.index }} 条</span
                 >
               </h2>
               <p class="text-base-content/45 mt-1 text-xs">
-                按内核顺序逐条推演 · 模式 {{ configs.mode || '未知' }}
+                {{ routeSubtitle }}
               </p>
             </div>
           </header>
           <ol class="p-5">
             <li
-              v-for="(step, index) in predictedSteps"
+              v-for="(step, index) in routeSteps"
               :key="step.title"
               class="relative flex gap-3 pb-6 last:pb-0"
             >
               <div
-                v-if="index < predictedSteps.length - 1"
+                v-if="index < routeSteps.length - 1"
                 class="border-primary/25 absolute top-6 bottom-0 left-3 border-l"
               />
               <span
@@ -89,7 +105,7 @@
             </li>
           </ol>
           <details
-            v-if="prediction && prediction.uncertain.length"
+            v-if="!routeHit && prediction && prediction.uncertain.length"
             class="border-base-content/10 mx-5 mb-4 border-t pt-3 text-xs"
           >
             <summary class="text-warning cursor-pointer">
@@ -170,6 +186,11 @@
             >{{ penetrationHitCount }} / {{ penetrationGroups.length }} 个规则集真命中</span
           >
           <span class="text-base-content/45 text-xs">{{ queryHint }}</span>
+          <span
+            v-if="routeHit?.fromOracle"
+            class="text-base-content/45 text-xs"
+            >本节只列出面板规则源缓存中的条目；上方「规则引擎」结论已按内核本地规则集判定</span
+          >
         </div>
         <div class="space-y-2">
           <details
@@ -381,12 +402,40 @@ const props = defineProps<{ initialTarget?: string; initialSource?: string }>()
 
 type PenetrationEntry = { line?: number; value?: string; mode?: string; type?: string; raw?: string }
 type PenetrationGroup = { name: string; totalRules: number; matches: PenetrationEntry[] }
+type RouteDecision = {
+  ruleIndex: number
+  ruleType: string
+  rulePayload: string
+  target: string
+  incomplete: boolean
+  missingProviders: string[]
+  droppedRules: string[]
+  decidedAt: string
+  cached?: boolean
+}
+type RouteHit = {
+  ruleIndex: number
+  ruleType: string
+  rulePayload: string
+  group: string
+  chains: string[]
+  node: string
+  fromOracle: boolean
+  incomplete: boolean
+  missingProviders: string[]
+  droppedRules: number
+}
 type ProbeResult = {
-  status: number
+  status: number | null
   elapsedMs: number
   checkedAt: string
   evidence: Connection | null
   source: string
+  hostname?: string
+  oracle?: RouteDecision | null
+  oracleError?: string
+  attribution?: { matchedBy: string; ambiguous: boolean; degraded: boolean } | null
+  hit?: RouteHit | null
 }
 
 const input = ref(props.initialTarget || '')
@@ -400,6 +449,7 @@ const selectedRuleIndex = ref(-1)
 const looking = ref(false)
 const probing = ref(false)
 const probeResult = ref<ProbeResult | null>(null)
+const ruleResult = ref<ProbeResult | null>(null)
 const probeError = ref('')
 const penetrationGroups = ref<PenetrationGroup[]>([])
 const matchedProviders = ref<string[] | null>(null)
@@ -788,8 +838,24 @@ async function probe() {
   probing.value = true
   probeError.value = ''
   probeResult.value = null
+  ruleResult.value = null
   try {
-    const result = await diagnosticsRequest<ProbeResult>('route', { target: input.value }, controller.signal)
+    // 规则判定：只读本地规则与规则集，不访问目标站点，未访问过的域名同样可判。
+    const decided = await diagnosticsRequest<ProbeResult>(
+      'route',
+      { target: input.value, mode: 'rule' },
+      controller.signal,
+    )
+    if (!controller.signal.aborted) ruleResult.value = decided
+  } catch {
+    // 规则判定失败不阻塞下面的真实探测
+  }
+  try {
+    const result = await diagnosticsRequest<ProbeResult>(
+      'route',
+      { target: input.value, mode: 'both' },
+      controller.signal,
+    )
     if (!controller.signal.aborted) probeResult.value = result
   } catch (cause) {
     if (!controller.signal.aborted)
@@ -802,7 +868,7 @@ async function probe() {
 const probeSteps = computed(() => {
   const probe = probeResult.value
   if (!probe) return []
-  const evidence = probe.evidence
+  const hit = probe.hit
   return [
     {
       title: '自动发起探测',
@@ -811,22 +877,73 @@ const probeSteps = computed(() => {
     },
     {
       title: '响应结果',
-      value: `HTTP ${probe.status}`,
+      value: probe.status == null ? '未发起（仅规则判定）' : `HTTP ${probe.status}`,
       note:
-        probe.status >= 200 && probe.status < 400
-          ? '目标可达，请求已按内核规则转发'
-          : '目标返回异常状态码，请求同样经过内核',
+        probe.status == null
+          ? '规则判定完成，未发起真实请求'
+          : probe.status >= 200 && probe.status < 400
+            ? '目标可达，请求已按内核规则转发'
+            : '目标返回异常状态码，请求同样经过内核',
     },
     {
       title: '真实出站链路',
-      value: evidence
-        ? [...evidence.chains].reverse().join(' → ')
+      value: hit?.chains?.length
+        ? [...hit.chains].reverse().join(' → ')
         : '未捕获到本次探测对应的内核连接',
-      note: evidence
-        ? `命中规则：${[evidence.rule, evidence.rulePayload].filter(Boolean).join(' · ')}`
-        : 'NAT 或时钟偏差可能导致连接无法归属，仍可参考「匹配连接」列表',
+      note: hit?.chains?.length
+        ? `命中规则：${[hit.ruleType, hit.rulePayload].filter(Boolean).join(' · ')}${
+            probe.attribution?.matchedBy === 'docker-nat' ? ' · 经 Docker NAT 归属' : ''
+          }${probe.attribution?.ambiguous ? ' · 存在多条候选，仅供参考' : ''} · 出口节点：${hit.node || '—'}`
+        : probe.attribution?.degraded
+          ? '无法读取内核连接列表，本次未做归属'
+          : 'Docker NAT 会改写源地址导致归属失败，可参考下方「匹配连接」或改用规则引擎结果',
     },
   ]
+})
+
+const routeHit = computed<RouteHit | null>(() => probeResult.value?.hit || ruleResult.value?.hit || null)
+const routeRuleText = computed(() => {
+  const hit = routeHit.value
+  if (!hit) return ''
+  return hit.rulePayload ? `${hit.ruleType}(${hit.rulePayload})` : hit.ruleType || '未知规则'
+})
+const routeSteps = computed(() => {
+  const hit = routeHit.value
+  if (!hit) return predictedSteps.value
+  const chainText = hit.chains.length ? [...hit.chains].reverse().join(' → ') : hit.group || '—'
+  return [
+    {
+      title: '发起访问',
+      value: target.value || hit.group || '—',
+      note: hit.fromOracle
+        ? '规则引擎只读本地规则与规则集，不访问目标站点，任意域名都能判'
+        : '规则命中来自内核实测连接',
+    },
+    {
+      title: '规则匹配',
+      value: hit.ruleIndex >= 0 ? `第 ${hit.ruleIndex + 1} 条 · ${routeRuleText.value}` : routeRuleText.value,
+      note: hit.incomplete
+        ? '前序存在需要端口 / 网络上下文的规则，实际结果可能不同'
+        : '按内核规则顺序取第一条命中',
+    },
+    {
+      title: '策略目标',
+      value: hit.group || '—',
+      note: hit.droppedRules > 0
+        ? `${hit.droppedRules} 条规则集缺少本地缓存，已跳过`
+        : '规则指向的策略组',
+    },
+    {
+      title: '最终出口',
+      value: chainText,
+      note: hit.chains.length ? '实测链路：规则组 → 子策略 → 出口节点' : '尚未取得实测链路，此处为规则目标',
+    },
+  ]
+})
+const routeSubtitle = computed(() => {
+  if (routeHit.value?.fromOracle) return '规则引擎判定 · 只读本地规则与规则集 · 不访问目标站点'
+  if (routeHit.value) return '命中的规则来自内核实测连接'
+  return '按内核顺序逐条推演（无规则引擎结果时仅供参考）'
 })
 
 const realRouteSteps = computed(() =>
@@ -834,7 +951,8 @@ const realRouteSteps = computed(() =>
 )
 const realRouteLabel = computed(() => {
   if (probing.value) return '检测中'
-  if (probeResult.value) return `HTTP ${probeResult.value.status}`
+  if (probeResult.value)
+    return probeResult.value.status ? `HTTP ${probeResult.value.status}` : '规则已判定'
   if (probeError.value) return '检测失败'
   if (actual.value) return '内核记录'
   return '等待检测'
