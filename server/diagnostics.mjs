@@ -186,6 +186,56 @@ const freePort = () =>
 // 作为「代理已可服务」的就绪信号，而不是只看 TCP 是否可连。
 const PROXY_SERVING_PATTERN = /proxy listening at/i
 export const isProxyServing = (log) => PROXY_SERVING_PATTERN.test(String(log || ''))
+
+// OpenClash 打开「本机代理」时会把本机出站也劫持进内核；探测内核若走默认路由出网就会绕回
+// OpenClash，节点写的是 IP 时更会直接形成回环（表现是 connect timeout）。这里把探测内核的
+// 出站绑定到真实 WAN 网卡，绕开劫持。可用 ZASHBOARD_DIAGNOSTICS_INTERFACE 覆盖。
+const VIRTUAL_INTERFACE_PATTERN =
+  /^(?:lo|tun|utun|tap|Meta|clash|mihomo|wg|docker|br-|veth|virbr|podman|tailscale|zt)/i
+let egressInterfaceCache
+
+const detectEgressInterface = async () => {
+  const override = String(process.env.ZASHBOARD_DIAGNOSTICS_INTERFACE || '').trim()
+  if (override) return override
+  if (process.platform !== 'linux') return ''
+  const usable = (iface) => Boolean(iface) && !VIRTUAL_INTERFACE_PATTERN.test(iface)
+  try {
+    const routes = await fs.readFile('/proc/net/route', 'utf8')
+    for (const line of routes.split('\n').slice(1)) {
+      const [iface, destination, gateway, flags] = line.trim().split(/\s+/)
+      if (destination !== '00000000' || !gateway || gateway === '00000000') continue
+      if ((Number.parseInt(flags || '', 16) & 0x2) === 0) continue
+      if (usable(iface)) return iface
+    }
+  } catch {
+    // 读不到 IPv4 路由就继续尝试 IPv6
+  }
+  try {
+    const routes = await fs.readFile('/proc/net/ipv6_route', 'utf8')
+    for (const line of routes.split('\n')) {
+      const fields = line.trim().split(/\s+/)
+      if (fields.length < 10) continue
+      const [destination, prefix, , , gateway] = fields
+      if (!/^0+$/.test(destination) || prefix !== '00') continue
+      if (!gateway || /^0+$/.test(gateway)) continue
+      const iface = fields[9]
+      if (usable(iface)) return iface
+    }
+  } catch {
+    // 没有可用的默认路由就保持不绑定
+  }
+  return ''
+}
+
+const egressInterfaceOption = async () => {
+  if (!egressInterfaceCache || egressInterfaceCache.expires < Date.now()) {
+    egressInterfaceCache = {
+      value: await detectEgressInterface(),
+      expires: Date.now() + 300_000,
+    }
+  }
+  return egressInterfaceCache.value ? { 'interface-name': egressInterfaceCache.value } : {}
+}
 export async function withProbe(
   { binary, tempRoot, nodes, name, runtime, signal, spawnCore = spawn },
   run,
@@ -245,6 +295,7 @@ export async function withProbe(
         'proxy-server-nameserver': ['https://1.1.1.1/dns-query', 'https://223.5.5.5/dns-query'],
       },
       tun: { enable: false },
+      ...(await egressInterfaceOption()),
       proxies: resolvedNodes.filter((node) => node.type !== 'select'),
       'proxy-groups': resolvedNodes.filter((node) => node.type === 'select'),
       rules: [`MATCH,${probeName}`],
