@@ -26,6 +26,7 @@
 
       <template v-if="tab === 'connections'">
         <div
+          v-if="workspaceView === 'devices'"
           class="bg-base-200/70 flex gap-1 rounded-full p-1"
           role="group"
           aria-label="分组方式"
@@ -43,8 +44,33 @@
             {{ mode.label }}
           </button>
         </div>
-        <span class="text-base-content/60 text-sm">排序</span>
-        <div class="border-base-content/15 flex items-center gap-0.5 rounded-lg border px-1">
+        <div
+          class="bg-base-200/70 flex gap-1 rounded-full p-1"
+          role="group"
+          aria-label="连接视图"
+        >
+          <button
+            v-for="mode in VIEW_MODES"
+            :key="mode.key"
+            class="rounded-full px-3 py-1 text-sm"
+            :class="
+              workspaceView === mode.key ? 'bg-success/25 text-success' : 'text-base-content/55'
+            "
+            :aria-pressed="workspaceView === mode.key"
+            @click="workspaceView = mode.key"
+          >
+            {{ mode.label }}
+          </button>
+        </div>
+        <span
+          v-if="workspaceView === 'devices'"
+          class="text-base-content/60 text-sm"
+          >排序</span
+        >
+        <div
+          v-if="workspaceView === 'devices'"
+          class="border-base-content/15 flex items-center gap-0.5 rounded-lg border px-1"
+        >
           <select
             v-model="sortKey"
             aria-label="排序方式"
@@ -66,7 +92,7 @@
           </button>
         </div>
         <select
-          v-if="deviceOptions.length > 1"
+          v-if="workspaceView === 'devices' && deviceOptions.length > 1"
           v-model="deviceFilter"
           aria-label="按设备筛选"
           class="select select-sm w-auto max-w-44 text-sm"
@@ -80,8 +106,11 @@
             {{ item.label }}
           </option>
         </select>
-        <label class="input input-sm min-w-44 flex-1"
-          ><input
+        <label
+          v-if="workspaceView === 'devices'"
+          class="input input-sm min-w-44 flex-1"
+        >
+          <input
             v-model="query"
             aria-label="搜索连接"
             placeholder="搜索｜多个关键词用空格分隔"
@@ -241,6 +270,12 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 const route = useRoute(),
   router = useRouter()
+
+// 顶部一行的视图切换：卡片（新版工作区）/ 表格（原始列表）
+const VIEW_MODES = [
+  { key: 'devices', label: '卡片' },
+  { key: 'classic', label: '表格' },
+] as const
 
 // 直接进入「连接」页时内核数据流尚未启动，这里补齐（与概览页重复调用是安全的，store 会自行取消上一次订阅）
 let kernelStreamKey = ''
