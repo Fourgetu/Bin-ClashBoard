@@ -13,7 +13,7 @@ docker compose -f compose.desktop.yaml up -d
 
 访问 `http://localhost:2048`。示例仅发布到本机回环地址，持久化目录为同目录的 `data`。
 
-已有面板请使用原来的 Compose 文件，把镜像更新为 `ghcr.io/fourgetu/bin-clashboard:v2.06-14`（或更新 `latest`），保留原来的 `/app/data` 挂载再执行 `docker compose pull` 和 `docker compose up -d`。不要切换到空的数据目录。
+已有面板请使用原来的 Compose 文件，把镜像更新为 `ghcr.io/fourgetu/bin-clashboard:v2.06-16`（或更新 `latest`），保留原来的 `/app/data` 挂载再执行 `docker compose pull` 和 `docker compose up -d`。不要切换到空的数据目录。
 
 ## 连接电脑里的 Clash Mi
 
@@ -49,7 +49,7 @@ extra_hosts:
 ```yaml
 services:
   bin-clashboard:
-    # 原有 image、ports、volumes 等配置保留；镜像更新为 v2.06-14 或 latest
+    # 原有 image、ports、volumes 等配置保留；镜像更新为 v2.06-16 或 latest
     volumes:
       - ./data:/app/data
       - type: bind
@@ -77,7 +77,7 @@ macOS / Linux 把 `source` 换成该电脑上的实际数据目录。仅挂载�
 pwsh.exe -NoProfile -File .\scripts\enable-clashmi-mount.ps1 -DataDirectory 'C:\实际路径\ClashMi数据目录' -ComposeFile 'C:\原面板目录\compose.yaml' -Apply
 ```
 
-脚本验证运行配置存在，生成同目录的 `compose.clashmi.local.yaml`，校验 Compose 后拉取镜像并重建指定面板服务。默认服务名为 `bin-clashboard`；不同服务名追加 `-Service '你的服务名'`。已有不同内容的覆盖文件不会被覆盖。原 Compose 中的镜像应先更新为 `v2.06-14` 或 `latest`。
+脚本验证运行配置存在，生成同目录的 `compose.clashmi.local.yaml`，校验 Compose 后拉取镜像并重建指定面板服务。默认服务名为 `bin-clashboard`；不同服务名追加 `-Service '你的服务名'`。已有不同内容的覆盖文件不会被覆盖。原 Compose 中的镜像应先更新为 `v2.06-16` 或 `latest`。
 
 以后执行 Compose 更新时，同时带上原文件和 `compose.clashmi.local.yaml`，以保留挂载。也可使用仓库提供的 `compose.clashmi.yaml` 覆盖文件，但需自行设置 `CLASHMI_DATA_DIR`。已有容器若是 `docker run` 创建，需按原参数重建并额外添加 `--mount "type=bind,source=实际数据目录,target=/app/clashmi,readonly"`，保留原数据挂载。
 
